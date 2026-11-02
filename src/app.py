@@ -19,6 +19,7 @@ from src.api.routes import (
     websocket,
     accounts,
     platforms,
+    cloud,
 )
 from src.api.dependencies import (
     set_process_service,
@@ -67,6 +68,10 @@ set_task_generation_service(task_generation_service)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    import asyncio
+
+    from src.services.cloud_service import telemetry_loop
+
     # 启动时
     print("正在启动应用...")
     bootstrap_sqlite_storage()
@@ -85,11 +90,15 @@ async def lifespan(app: FastAPI):
     await scheduler_service.reload_jobs(tasks_list)
     scheduler_service.start()
 
+    # 匿名行情回传后台循环（可失败降级，不影响本地功能）
+    telemetry_task = asyncio.create_task(telemetry_loop())
+
     print("应用启动完成")
 
     yield
 
     # 关闭时
+    telemetry_task.cancel()
     print("正在关闭应用...")
     scheduler_service.stop()
     await process_service.stop_all()
@@ -115,6 +124,7 @@ app.include_router(results.router, dependencies=_auth)
 app.include_router(login_state.router, dependencies=_auth)
 app.include_router(accounts.router, dependencies=_auth)
 app.include_router(platforms.router, dependencies=_auth)
+app.include_router(cloud.router, dependencies=_auth)
 # WebSocket 在端点内校验 query token，不能套用读取 Authorization 头的 HTTP 依赖
 app.include_router(websocket.router)
 

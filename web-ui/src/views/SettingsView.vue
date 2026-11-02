@@ -13,6 +13,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
 import { getPromptContent, listPrompts, updatePrompt } from '@/api/prompts'
+import {
+  activateLicense,
+  checkUpdate,
+  flushTelemetry,
+  getCloudStatus,
+  setTelemetryEnabled,
+  verifyLicense,
+  type CloudStatus,
+  type UpdateCheckResult,
+} from '@/api/cloud'
+import { Switch } from '@/components/ui/switch'
 import NotificationSettingsPanel from '@/components/settings/NotificationSettingsPanel.vue'
 import RotationSettingsPanel from '@/components/settings/RotationSettingsPanel.vue'
 const { t } = useI18n()
@@ -36,7 +47,91 @@ const {
 
 const activeTab = ref('ai')
 const route = useRoute()
-const validTabs = new Set(['notifications', 'ai', 'rotation', 'status', 'prompts'])
+const validTabs = new Set(['notifications', 'ai', 'rotation', 'status', 'prompts', 'cloud'])
+
+// ---- 云服务（授权 / 行情回传 / 更新） ----
+const cloudStatus = ref<CloudStatus | null>(null)
+const licenseKeyInput = ref('')
+const isCloudBusy = ref(false)
+const updateResult = ref<UpdateCheckResult | null>(null)
+
+async function refreshCloudStatus() {
+  try {
+    cloudStatus.value = await getCloudStatus()
+  } catch (e) {
+    console.error('cloud status failed', e)
+  }
+}
+
+async function handleActivateLicense() {
+  if (!licenseKeyInput.value.trim()) return
+  isCloudBusy.value = true
+  try {
+    await activateLicense(licenseKeyInput.value.trim())
+    licenseKeyInput.value = ''
+    notifySuccess(t('settings.cloud.licenseActivated'))
+    await refreshCloudStatus()
+  } catch (e) {
+    notifyError(t('settings.cloud.licenseActivateFailed'), (e as Error).message)
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+async function handleVerifyLicense() {
+  isCloudBusy.value = true
+  try {
+    const result = await verifyLicense()
+    if (result.licensed) {
+      notifySuccess(t('settings.cloud.licenseValid'), result.in_grace ? t('settings.cloud.inGrace') : undefined)
+    } else {
+      notifyError(t('settings.cloud.licenseInvalid'), result.reason || undefined)
+    }
+    await refreshCloudStatus()
+  } catch (e) {
+    notifyError(t('settings.cloud.licenseVerifyFailed'), (e as Error).message)
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+async function handleToggleTelemetry(enabled: boolean) {
+  try {
+    await setTelemetryEnabled(enabled)
+    await refreshCloudStatus()
+    notifySuccess(enabled ? t('settings.cloud.telemetryOn') : t('settings.cloud.telemetryOff'))
+  } catch (e) {
+    notifyError(t('common.operationFailed'), (e as Error).message)
+  }
+}
+
+async function handleFlushTelemetry() {
+  isCloudBusy.value = true
+  try {
+    const uploaded = await flushTelemetry()
+    notifySuccess(t('settings.cloud.telemetryFlushed'), `${uploaded}`)
+    await refreshCloudStatus()
+  } catch (e) {
+    notifyError(t('common.operationFailed'), (e as Error).message)
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+async function handleCheckUpdate() {
+  isCloudBusy.value = true
+  try {
+    updateResult.value = await checkUpdate()
+  } catch (e) {
+    notifyError(t('common.operationFailed'), (e as Error).message)
+  } finally {
+    isCloudBusy.value = false
+  }
+}
+
+watch(activeTab, (tab) => {
+  if (tab === 'cloud' && !cloudStatus.value) refreshCloudStatus()
+})
 
 const promptFiles = ref<string[]>([])
 const selectedPrompt = ref<string | null>(null)
@@ -193,6 +288,7 @@ watch(selectedPrompt, async (value) => {
         <TabsTrigger class="shrink-0" value="notifications">{{ t('settings.tabs.notifications') }}</TabsTrigger>
         <TabsTrigger class="shrink-0" value="status">{{ t('settings.tabs.status') }}</TabsTrigger>
         <TabsTrigger class="shrink-0" value="prompts">{{ t('settings.tabs.prompts') }}</TabsTrigger>
+        <TabsTrigger class="shrink-0" value="cloud">{{ t('settings.tabs.cloud') }}</TabsTrigger>
       </TabsList>
 
       <!-- AI Tab -->
@@ -321,6 +417,89 @@ watch(selectedPrompt, async (value) => {
             </div>
           </CardContent>
         </Card>
+      </TabsContent>
+
+      <!-- Cloud Tab：授权与行情回馈 -->
+      <TabsContent value="cloud">
+        <div class="space-y-6">
+          <!-- License -->
+          <Card>
+            <CardHeader>
+              <CardTitle>{{ t('settings.cloud.licenseTitle') }}</CardTitle>
+              <CardDescription>{{ t('settings.cloud.licenseDescription') }}</CardDescription>
+            </CardHeader>
+            <CardContent class="space-y-4">
+              <div v-if="cloudStatus?.license?.ok" class="flex items-center justify-between border-b pb-4">
+                <div>
+                  <h3 class="font-medium">{{ cloudStatus.license.plan }}</h3>
+                  <p class="text-sm text-gray-500">
+                    {{ cloudStatus.license.key }}
+                    <span v-if="cloudStatus.license.expires_at"> · {{ t('settings.cloud.expiresAt') }}: {{ cloudStatus.license.expires_at.slice(0, 10) }}</span>
+                  </p>
+                </div>
+                <span class="text-green-600 font-bold bg-green-50 px-3 py-1 rounded-full">{{ t('common.active') }}</span>
+              </div>
+              <div v-else-if="cloudStatus" class="bg-yellow-50 border border-yellow-200 text-yellow-800 px-3 py-2 rounded text-sm">
+                {{ t('settings.cloud.noLicense') }}
+              </div>
+              <div class="flex gap-2">
+                <Input v-model="licenseKeyInput" :placeholder="t('settings.cloud.keyPlaceholder')" class="flex-1" />
+                <Button @click="handleActivateLicense" :disabled="isCloudBusy || !licenseKeyInput.trim()">{{ t('settings.cloud.activate') }}</Button>
+                <Button variant="outline" @click="handleVerifyLicense" :disabled="isCloudBusy">{{ t('settings.cloud.verify') }}</Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <!-- Telemetry -->
+          <Card>
+            <CardHeader>
+              <CardTitle>{{ t('settings.cloud.telemetryTitle') }}</CardTitle>
+              <CardDescription>{{ t('settings.cloud.telemetryDescription') }}</CardDescription>
+            </CardHeader>
+            <CardContent class="space-y-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="font-medium">{{ t('settings.cloud.telemetryToggle') }}</h3>
+                  <p class="text-xs text-gray-500">{{ t('settings.cloud.telemetryPrivacy') }}</p>
+                </div>
+                <Switch :model-value="cloudStatus?.telemetry.enabled ?? false" @update:model-value="handleToggleTelemetry" />
+              </div>
+              <div v-if="cloudStatus?.telemetry.state?.uploaded_total" class="text-sm text-gray-500">
+                {{ t('settings.cloud.telemetryStats', {
+                  total: cloudStatus.telemetry.state.uploaded_total,
+                  time: (cloudStatus.telemetry.state.last_uploaded_at || '').slice(0, 19).replace('T', ' ')
+                }) }}
+              </div>
+              <Button variant="outline" size="sm" @click="handleFlushTelemetry" :disabled="isCloudBusy || !cloudStatus?.telemetry.enabled">
+                {{ t('settings.cloud.telemetryFlush') }}
+              </Button>
+            </CardContent>
+          </Card>
+
+          <!-- Update -->
+          <Card>
+            <CardHeader>
+              <CardTitle>{{ t('settings.cloud.updateTitle') }}</CardTitle>
+              <CardDescription>{{ t('settings.cloud.updateDescription') }}</CardDescription>
+            </CardHeader>
+            <CardContent class="space-y-3">
+              <div class="flex items-center gap-3">
+                <Button variant="outline" @click="handleCheckUpdate" :disabled="isCloudBusy">{{ t('settings.cloud.checkUpdate') }}</Button>
+                <span class="text-sm text-gray-500">{{ t('settings.cloud.currentVersion') }}: {{ cloudStatus?.app_version || '-' }}</span>
+              </div>
+              <div v-if="updateResult" class="text-sm">
+                <template v-if="updateResult.latest">
+                  <span v-if="updateResult.latest.version === updateResult.current_version" class="text-green-600">{{ t('settings.cloud.upToDate') }}</span>
+                  <span v-else class="text-blue-600">
+                    {{ t('settings.cloud.newVersion', { version: updateResult.latest.version }) }}
+                    <a v-if="updateResult.latest.url" :href="updateResult.latest.url" target="_blank" class="underline ml-1">{{ t('settings.cloud.download') }}</a>
+                  </span>
+                </template>
+                <span v-else class="text-yellow-600">{{ t('settings.cloud.updateCheckFailed') }}</span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </TabsContent>
 
       <!-- Prompt Tab -->
