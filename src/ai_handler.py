@@ -11,11 +11,16 @@ from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 import requests
 
-# 设置标准输出编码为UTF-8，解决Windows控制台编码问题
+# 设置标准输出编码为UTF-8，解决Windows控制台编码问题。
+# 注意：用 reconfigure 而非 detach() 包装——detach 会破坏 pytest 等外部捕获缓冲。
 if sys.platform.startswith('win'):
-    import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.detach())
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.detach())
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _encoding = str(getattr(_stream, "encoding", "") or "").lower().replace("-", "")
+            if _encoding and _encoding not in {"utf8", "utf8mb4"}:
+                _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
 from src.config import (
     AI_DEBUG_MODE,
