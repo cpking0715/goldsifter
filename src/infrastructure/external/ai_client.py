@@ -21,8 +21,10 @@ from src.services.ai_request_compat import (
     RESPONSES_API_MODE,
     build_ai_request_params,
     create_ai_response_async,
+    extract_max_tokens_cap,
     is_chat_completions_api_unsupported_error,
     is_json_output_unsupported_error,
+    is_max_tokens_out_of_range_error,
     is_responses_api_unsupported_error,
     is_temperature_unsupported_error,
     remove_temperature_param,
@@ -201,8 +203,9 @@ class AIClient:
         temperature: float = 0.1,
         max_output_tokens: int = 4000,
         enable_json_output: Optional[bool] = None,
+        model: Optional[str] = None,
     ) -> str:
-        """调用 AI API"""
+        """调用 AI API（model 缺省用主模型，可显式指定文本模型做长输出）"""
         api_mode = CHAT_COMPLETIONS_API_MODE
         use_response_format = (
             self.settings.enable_response_format
@@ -210,12 +213,13 @@ class AIClient:
             else enable_json_output
         )
         use_temperature = True
+        use_model = model or self.settings.model_name
         max_attempts = 4
 
         for attempt in range(max_attempts):
             request_params = build_ai_request_params(
                 api_mode,
-                model=self.settings.model_name,
+                model=use_model,
                 messages=messages,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
@@ -265,6 +269,15 @@ class AIClient:
                     use_temperature = False
                     changed = True
                     print("当前模型不支持 temperature 参数，正在自动重试并移除该参数")
+                if max_output_tokens and is_max_tokens_out_of_range_error(exc):
+                    cap = extract_max_tokens_cap(exc)
+                    if cap is None or cap >= max_output_tokens:
+                        cap = min(1024, max_output_tokens)
+                    print(
+                        f"服务商限制 max_tokens，已从 {max_output_tokens} 降级到 {cap} 重试"
+                    )
+                    max_output_tokens = cap
+                    changed = True
                 if changed and attempt < max_attempts - 1:
                     continue
                 raise

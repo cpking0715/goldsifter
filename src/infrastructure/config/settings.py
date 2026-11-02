@@ -43,6 +43,9 @@ class AISettings(_EnvSettings):
     api_key: Optional[str] = _env_field(None, "OPENAI_API_KEY")
     base_url: str = _env_field("", "OPENAI_BASE_URL")
     model_name: str = _env_field("", "OPENAI_MODEL_NAME")
+    # 长文本生成（如分析标准）可选专用文本模型；缺省用 model_name。
+    # 视觉模型（如 glm-4v-flash）max_tokens 上限低，不适合长输出。
+    text_model_name: Optional[str] = _env_field(None, "OPENAI_TEXT_MODEL_NAME")
     proxy_url: Optional[str] = _env_field(None, "PROXY_URL")
     debug_mode: bool = _env_field(False, "AI_DEBUG_MODE")
     enable_response_format: bool = _env_field(True, "ENABLE_RESPONSE_FORMAT")

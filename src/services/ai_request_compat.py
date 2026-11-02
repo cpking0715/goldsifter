@@ -1,7 +1,8 @@
 """AI 请求兼容性辅助逻辑。"""
 
 import copy
-from typing import Any, Dict, Iterable, List
+import re
+from typing import Any, Dict, Iterable, List, Optional
 
 
 RESPONSES_API_MODE = "responses"
@@ -89,6 +90,27 @@ def is_json_output_unsupported_error(error: Exception) -> bool:
         "not supported" in message.lower()
         and any(marker in message for marker in UNSUPPORTED_JSON_OUTPUT_MARKERS)
     )
+
+
+def is_max_tokens_out_of_range_error(error: Exception) -> bool:
+    """识别 max_tokens 超出服务商限制的错误（如智谱 1210：限制数值范围[1,1024]）。"""
+    message = str(error)
+    if "max_tokens" not in message and "max output tokens" not in message.lower():
+        return False
+    markers = ("范围", "range", "limit", "非法", "maximum", "must be")
+    return any(marker in message.lower() or marker in message for marker in markers)
+
+
+def extract_max_tokens_cap(error: Exception) -> Optional[int]:
+    """从错误消息中提取服务商允许的 max_tokens 上限（如 [1,1024] → 1024）。"""
+    message = str(error)
+    bracket = re.search(r"\[\s*\d+\s*,\s*(\d+)\s*\]", message)
+    if bracket:
+        return int(bracket.group(1))
+    limit = re.search(r"(?:maximum|max|不超过|上限)[^\d]{0,15}(\d{3,8})", message, re.I)
+    if limit:
+        return int(limit.group(1))
+    return None
 
 
 def is_responses_api_unsupported_error(error: Exception) -> bool:

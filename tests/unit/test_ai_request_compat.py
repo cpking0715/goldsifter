@@ -1,5 +1,7 @@
 from src.services.ai_request_compat import (
+    extract_max_tokens_cap,
     is_json_output_unsupported_error,
+    is_max_tokens_out_of_range_error,
     is_responses_api_unsupported_error,
     is_temperature_unsupported_error,
     remove_temperature_param,
@@ -82,3 +84,28 @@ def test_json_output_error_not_triggered_by_unrelated_400():
 def test_json_output_error_not_triggered_without_body():
     err = Exception("some random 400 error")
     assert is_json_output_unsupported_error(err) is False
+
+
+class FakeAPIError(Exception):
+    pass
+
+
+def test_is_max_tokens_out_of_range_error_matches_zhipu_style():
+    err = FakeAPIError(
+        "Error code: 400 - {'error': {'code': '1210', 'message': 'max_tokens参数非法：限制数值范围[1,1024]'}}"
+    )
+    assert is_max_tokens_out_of_range_error(err) is True
+    assert extract_max_tokens_cap(err) == 1024
+
+
+def test_is_max_tokens_out_of_range_error_ignores_other_errors():
+    assert is_max_tokens_out_of_range_error(FakeAPIError("temperature not supported")) is False
+    assert is_max_tokens_out_of_range_error(FakeAPIError("connection error")) is False
+    # 提到 max_tokens 但无范围/限制语义 -> 不匹配
+    assert is_max_tokens_out_of_range_error(FakeAPIError("max_tokens too small")) is False
+
+
+def test_extract_max_tokens_cap_variants():
+    assert extract_max_tokens_cap(FakeAPIError("max_tokens范围[1, 4096]")) == 4096
+    assert extract_max_tokens_cap(FakeAPIError("max_tokens exceeds maximum allowed value 2048")) == 2048
+    assert extract_max_tokens_cap(FakeAPIError("max_tokens bad but no numbers")) is None

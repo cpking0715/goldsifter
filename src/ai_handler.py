@@ -45,8 +45,10 @@ from src.services.ai_request_compat import (
     RESPONSES_API_MODE,
     build_ai_request_params,
     create_ai_response_async,
+    extract_max_tokens_cap,
     is_chat_completions_api_unsupported_error,
     is_json_output_unsupported_error,
+    is_max_tokens_out_of_range_error,
     is_responses_api_unsupported_error,
     is_temperature_unsupported_error,
     remove_temperature_param,
@@ -378,6 +380,7 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
     api_mode = CHAT_COMPLETIONS_API_MODE
     use_response_format = ENABLE_RESPONSE_FORMAT
     use_temperature = True
+    max_output_tokens = 4000
     for attempt in range(max_retries):
         try:
             # 根据重试次数调整参数
@@ -390,7 +393,7 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
                 model=MODEL_NAME,
                 messages=messages,
                 temperature=current_temperature,
-                max_output_tokens=4000,
+                max_output_tokens=max_output_tokens,
                 enable_json_output=use_response_format,
             )
             if not use_temperature:
@@ -471,6 +474,14 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
                 safe_print(
                     "   [AI分析] 当前模型不支持 temperature 参数，后续重试将自动禁用该参数。"
                 )
+            if max_output_tokens and is_max_tokens_out_of_range_error(e):
+                cap = extract_max_tokens_cap(e)
+                if cap is None or cap >= max_output_tokens:
+                    cap = min(1024, max_output_tokens)
+                safe_print(
+                    f"   [AI分析] 服务商限制 max_tokens，已从 {max_output_tokens} 降级到 {cap} 重试。"
+                )
+                max_output_tokens = cap
             if AI_DEBUG_MODE:
                 safe_print(f"\n--- [AI DEBUG] 第{attempt + 1}次尝试 EXCEPTION ---")
                 safe_print(repr(e))

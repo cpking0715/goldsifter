@@ -77,12 +77,18 @@ def _strip_reasoning_blocks(text: str) -> str:
 
 async def _request_generated_text(ai_client: AIClient, prompt: str) -> str:
     print("正在调用AI生成新的分析标准，请稍候...")
+    # 标准生成长输出优先用专用文本模型（视觉模型 max_tokens 上限普遍低）
+    settings = getattr(ai_client, "settings", None)
+    text_model = str(getattr(settings, "text_model_name", None) or "").strip() or None
+    if text_model:
+        print(f"长文本生成使用文本模型: {text_model}")
     try:
         generated_text = await ai_client._call_ai(
             [{"role": "user", "content": prompt}],
             temperature=0.5,
             max_output_tokens=CRITERIA_MAX_OUTPUT_TOKENS,
             enable_json_output=False,
+            model=text_model,
         )
     except Exception as exc:
         print(f"调用 OpenAI API 时出错: {exc}")
