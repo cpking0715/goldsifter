@@ -8,6 +8,7 @@ import json
 import threading
 from pathlib import Path
 
+from src.collectors.platforms import normalize_platform
 from src.infrastructure.persistence.sqlite_connection import init_schema, sqlite_connection
 from src.infrastructure.persistence.storage_names import (
     build_result_filename,
@@ -78,17 +79,18 @@ def _import_tasks_if_needed(conn, legacy_config_file: str | None) -> None:
         conn.execute(
             """
             INSERT INTO tasks (
-                id, task_name, enabled, keyword, description, analyze_images,
+                id, task_name, enabled, platform, keyword, description, analyze_images,
                 max_pages, personal_only, min_price, max_price, cron,
                 ai_prompt_base_file, ai_prompt_criteria_file, account_state_file,
                 account_strategy, free_shipping, new_publish_option, region,
                 decision_mode, keyword_rules_json, is_running
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 index,
                 raw_task.get("task_name", ""),
                 _as_int(raw_task.get("enabled", True)),
+                normalize_platform(raw_task.get("platform", "xianyu")),
                 raw_task.get("keyword", ""),
                 raw_task.get("description", ""),
                 _as_int(raw_task.get("analyze_images", True)),

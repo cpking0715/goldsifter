@@ -13,23 +13,24 @@ from typing import Any, Iterable, Optional
 
 from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
 from src.infrastructure.persistence.sqlite_connection import sqlite_connection
+from src.infrastructure.persistence.storage_names import (
+    normalize_keyword_slug as _keyword_slug_with_platform,
+)
+from src.collectors.platforms import PLATFORM_XIANYU
 
 PRICE_HISTORY_DIR = "price_history"
 DEFAULT_HISTORY_WINDOW_DAYS = 30
 
 
-def normalize_keyword_slug(keyword: str) -> str:
-    text = "".join(
-        char for char in str(keyword or "").lower().replace(" ", "_")
-        if char.isalnum() or char in "_-"
-    ).rstrip("_")
-    return text or "unknown"
+def normalize_keyword_slug(keyword: str, platform: str = PLATFORM_XIANYU) -> str:
+    """关键词 slug；非闲鱼平台加平台前缀，避免跨平台行情数据混写。"""
+    return _keyword_slug_with_platform(keyword, platform)
 
 
-def build_price_history_path(keyword: str) -> str:
+def build_price_history_path(keyword: str, platform: str = PLATFORM_XIANYU) -> str:
     return os.path.join(
         PRICE_HISTORY_DIR,
-        f"{normalize_keyword_slug(keyword)}_history.jsonl",
+        f"{normalize_keyword_slug(keyword, platform)}_history.jsonl",
     )
 
 
@@ -101,6 +102,7 @@ def record_market_snapshots(
     run_id: str,
     snapshot_time: Optional[str] = None,
     seen_item_ids: Optional[set[str]] = None,
+    platform: str = PLATFORM_XIANYU,
 ) -> list[dict]:
     snapshot_time = _safe_iso_datetime(snapshot_time)
     seen = seen_item_ids if seen_item_ids is not None else set()
@@ -123,7 +125,7 @@ def record_market_snapshots(
         return []
 
     bootstrap_sqlite_storage()
-    keyword_slug = normalize_keyword_slug(keyword)
+    keyword_slug = normalize_keyword_slug(keyword, platform)
     with sqlite_connection() as conn:
         for record in records:
             conn.execute(
@@ -156,7 +158,7 @@ def record_market_snapshots(
     return records
 
 
-def load_price_snapshots(keyword: str) -> list[dict]:
+def load_price_snapshots(keyword: str, platform: str = PLATFORM_XIANYU) -> list[dict]:
     bootstrap_sqlite_storage()
     with sqlite_connection() as conn:
         rows = conn.execute(
@@ -166,7 +168,7 @@ def load_price_snapshots(keyword: str) -> list[dict]:
             WHERE keyword_slug = ?
             ORDER BY snapshot_time ASC, id ASC
             """,
-            (normalize_keyword_slug(keyword),),
+            (normalize_keyword_slug(keyword, platform),),
         ).fetchall()
     snapshots: list[dict] = []
     for row in rows:
@@ -191,12 +193,12 @@ def load_price_snapshots(keyword: str) -> list[dict]:
     return snapshots
 
 
-def delete_price_snapshots(keyword: str) -> int:
+def delete_price_snapshots(keyword: str, platform: str = PLATFORM_XIANYU) -> int:
     bootstrap_sqlite_storage()
     with sqlite_connection() as conn:
         cursor = conn.execute(
             "DELETE FROM price_snapshots WHERE keyword_slug = ?",
-            (normalize_keyword_slug(keyword),),
+            (normalize_keyword_slug(keyword, platform),),
         )
         conn.commit()
     return int(cursor.rowcount or 0)
@@ -366,8 +368,9 @@ def build_price_history_insights(
     *,
     window_days: int = DEFAULT_HISTORY_WINDOW_DAYS,
     visible_item_ids: Optional[set[str]] = None,
+    platform: str = PLATFORM_XIANYU,
 ) -> dict:
-    snapshots = load_price_snapshots(keyword)
+    snapshots = load_price_snapshots(keyword, platform)
     if visible_item_ids is not None:
         snapshots = [
             snapshot

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Task, TaskGenerateRequest } from '@/types/task.d.ts'
+import { listPlatforms, type PlatformCapabilities, type PlatformInfo } from '@/api/platforms'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -27,9 +28,43 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'submit', data: EmittedData): void
 }>()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const form = ref<any>({})
+const XIANYU_CAPABILITIES: PlatformCapabilities = {
+  price_range: true,
+  personal_only: true,
+  free_shipping: true,
+  new_publish_option: true,
+  region: true,
+  requires_login_state: true,
+  seller_profile: true,
+}
+const platforms = ref<PlatformInfo[]>([
+  { platform_id: 'xianyu', display_name: '闲鱼', capabilities: XIANYU_CAPABILITIES },
+  {
+    platform_id: 'kongfz',
+    display_name: '孔夫子旧书网',
+    capabilities: {
+      price_range: true,
+      personal_only: false,
+      free_shipping: false,
+      new_publish_option: false,
+      region: false,
+      requires_login_state: false,
+      seller_profile: false,
+    },
+  },
+])
+const selectedCapabilities = computed(() => {
+  const current = platforms.value.find((item) => item.platform_id === (form.value.platform || 'xianyu'))
+  return current?.capabilities || XIANYU_CAPABILITIES
+})
+
+function platformOptionLabel(option: PlatformInfo) {
+  const key = `platforms.${option.platform_id}`
+  return te(key) ? t(key) : option.display_name
+}
 const accountStrategy = ref<'auto' | 'fixed' | 'rotate'>('auto')
 const selectedAccountStateFile = ref(AUTO_ACCOUNT_VALUE)
 const keywordRulesInput = ref('')
@@ -155,6 +190,9 @@ watch(() => [props.mode, props.initialData, props.defaultValues, props.defaultAc
     cronMode.value = isPresetCronValue(cronVal) ? 'preset' : 'custom'
   }
 
+  if (!form.value.platform) {
+    form.value.platform = 'xianyu'
+  }
   accountStrategy.value = form.value.account_strategy || (props.defaultAccount ? 'fixed' : 'auto')
   selectedAccountStateFile.value =
     form.value.account_state_file || props.defaultAccount || AUTO_ACCOUNT_VALUE
@@ -182,6 +220,15 @@ function handleAccountStrategyChange(event: Event) {
 function handleAccountStateFileChange(event: Event) {
   selectedAccountStateFile.value = (event.target as HTMLSelectElement).value || AUTO_ACCOUNT_VALUE
 }
+
+onMounted(async () => {
+  try {
+    const remote = await listPlatforms()
+    if (remote.length > 0) platforms.value = remote
+  } catch {
+    // 接口不可用时保留内置的闲鱼 / 孔夫子选项
+  }
+})
 
 function handleSubmit() {
   if (!form.value.task_name || !form.value.keyword) {
@@ -216,7 +263,11 @@ function handleSubmit() {
   // Filter out fields that shouldn't be sent in update requests
   const { id, is_running, next_run_at, ...submitData } = form.value as any
   const currentAccountStrategy = accountStrategy.value || 'auto'
-  if (currentAccountStrategy === 'fixed') {
+  submitData.platform = form.value.platform || 'xianyu'
+  if (!selectedCapabilities.value.requires_login_state) {
+    submitData.account_strategy = 'auto'
+    submitData.account_state_file = null
+  } else if (currentAccountStrategy === 'fixed') {
     const currentAccountStateFile = selectedAccountStateFile.value || AUTO_ACCOUNT_VALUE
     if (currentAccountStateFile === AUTO_ACCOUNT_VALUE) {
       toast({
@@ -246,7 +297,9 @@ function handleSubmit() {
   }
 
   submitData.decision_mode = decisionMode
-  submitData.account_strategy = currentAccountStrategy
+  if (selectedCapabilities.value.requires_login_state) {
+    submitData.account_strategy = currentAccountStrategy
+  }
   submitData.analyze_images = submitData.analyze_images !== false
   submitData.keyword_rules = decisionMode === 'keyword' ? keywordRules : []
   if (decisionMode === 'keyword' && !submitData.description) {
@@ -267,6 +320,22 @@ function handleSubmit() {
       <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label for="keyword" class="sm:text-right">{{ t('tasks.form.keyword') }}</Label>
         <Input id="keyword" v-model="form.keyword" class="sm:col-span-3" :placeholder="t('tasks.form.keywordPlaceholder')" required />
+      </div>
+      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+        <Label class="sm:text-right">{{ t('tasks.form.platform') }}</Label>
+        <div class="space-y-1 sm:col-span-3">
+          <Select v-model="form.platform">
+            <SelectTrigger>
+              <SelectValue :placeholder="t('tasks.form.platformPlaceholder')" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="option in platforms" :key="option.platform_id" :value="option.platform_id">
+                {{ platformOptionLabel(option) }}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-gray-500">{{ t('tasks.form.platformHint') }}</p>
+        </div>
       </div>
       <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.decisionMode') }}</Label>
@@ -319,7 +388,7 @@ function handleSubmit() {
         </div>
       </div>
 
-      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.price_range" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.priceRange') }}</Label>
         <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:col-span-3">
           <Input type="number" v-model="form.min_price as any" :aria-label="t('tasks.form.minPrice')" :placeholder="t('tasks.form.minPrice')" />
@@ -367,7 +436,7 @@ function handleSubmit() {
           </Tabs>
         </div>
       </div>
-      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.requires_login_state" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.accountStrategyLabel') }}</Label>
         <div class="space-y-2 sm:col-span-3">
           <select
@@ -384,7 +453,7 @@ function handleSubmit() {
           </p>
         </div>
       </div>
-      <div v-if="accountStrategy === 'fixed'" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.requires_login_state && accountStrategy === 'fixed'" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.fixedAccount') }}</Label>
         <div class="sm:col-span-3">
           <select
@@ -399,19 +468,19 @@ function handleSubmit() {
           </select>
         </div>
       </div>
-      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.personal_only" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label for="personal-only" class="sm:text-right">{{ t('tasks.form.personalOnly') }}</Label>
         <div class="sm:col-span-3">
           <Switch id="personal-only" v-model="form.personal_only" />
         </div>
       </div>
-      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.free_shipping" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label for="free-shipping" class="sm:text-right">{{ t('tasks.form.freeShipping') }}</Label>
         <div class="sm:col-span-3">
           <Switch id="free-shipping" v-model="form.free_shipping" />
         </div>
       </div>
-      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.new_publish_option" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.newPublish') }}</Label>
         <div class="sm:col-span-3">
           <Select v-model="form.new_publish_option as any">
@@ -429,7 +498,7 @@ function handleSubmit() {
           </Select>
         </div>
       </div>
-      <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
+      <div v-if="selectedCapabilities.region" class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.region') }}</Label>
         <div class="space-y-1 sm:col-span-3">
           <TaskRegionSelector v-model="form.region as any" />

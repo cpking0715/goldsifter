@@ -2,7 +2,7 @@
 结果记录富化与文件名校验服务
 """
 
-from src.infrastructure.persistence.storage_names import normalize_keyword_from_filename
+from src.infrastructure.persistence.storage_names import parse_result_filename
 from src.services.price_history_service import (
     build_item_price_context,
     load_price_snapshots,
@@ -17,7 +17,8 @@ def validate_result_filename(filename: str) -> None:
 
 
 def enrich_records_with_price_insight(records: list[dict], filename: str) -> list[dict]:
-    snapshots = load_price_snapshots(normalize_keyword_from_filename(filename))
+    platform, keyword = parse_result_filename(filename)
+    snapshots = load_price_snapshots(keyword, platform)
     if not snapshots:
         return records
 

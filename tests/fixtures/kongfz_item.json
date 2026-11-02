@@ -1,0 +1,14 @@
+{
+  "itemId": 88001,
+  "title": "红楼梦 人民文学出版社",
+  "price": 128,
+  "priceText": "128.00",
+  "link": {"pc": "https://book.kongfz.com/item/88001"},
+  "imgUrl": "https://img.example.com/honglou.jpg",
+  "qualityText": "九品",
+  "shopAreaText": "北京",
+  "shopName": "某旧书店",
+  "showTimeText": "3天前",
+  "author": "曹雪芹",
+  "press": "人民文学出版社"
+}

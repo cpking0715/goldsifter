@@ -5,6 +5,7 @@ WebSocket 路由
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Set
 
+from src.api.auth import verify_websocket_token
 
 router = APIRouter()
 
@@ -16,8 +17,12 @@ active_connections: Set[WebSocket] = set()
 async def websocket_endpoint(
     websocket: WebSocket,
 ):
-    """WebSocket 端点"""
-    # 接受连接
+    """WebSocket 端点（握手前校验 query 参数 token）"""
+    if not verify_websocket_token(websocket):
+        # 必须先 accept，否则 close 会在 CONNECTING 状态抛错，连接挂住
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     active_connections.add(websocket)
 

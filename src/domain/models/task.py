@@ -8,6 +8,7 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.collectors.platforms import require_platform
 from src.core.cron_utils import validate_cron_expression
 from src.services.account_strategy_service import (
     clean_account_state_file,
@@ -68,6 +69,10 @@ def _normalize_payload_keywords(payload: Any) -> Any:
     if payload is None or not isinstance(payload, dict):
         return payload
     values = dict(payload)
+    # 平台归一化：仅当显式传入时处理，避免 PATCH 语义下把 None 重置为默认平台
+    raw_platform = values.get("platform")
+    if raw_platform is not None and str(raw_platform).strip() != "":
+        values["platform"] = require_platform(raw_platform)
     values["account_state_file"] = clean_account_state_file(values.get("account_state_file"))
     values["account_strategy"] = normalize_account_strategy(
         values.get("account_strategy"),
@@ -112,6 +117,7 @@ class Task(BaseModel):
     id: Optional[int] = None
     task_name: str
     enabled: bool
+    platform: str = "xianyu"
     keyword: str
     description: Optional[str] = ""
     analyze_images: bool = True
@@ -135,6 +141,13 @@ class Task(BaseModel):
     @classmethod
     def normalize_legacy_keyword_payload(cls, values):
         return _normalize_payload_keywords(values)
+
+    @field_validator("platform", mode="before")
+    @classmethod
+    def normalize_platform_value(cls, value):
+        if value is None or str(value).strip() == "":
+            return "xianyu"
+        return require_platform(value)
 
     @field_validator("keyword_rules", mode="before")
     @classmethod
@@ -162,6 +175,7 @@ class TaskCreate(BaseModel):
 
     task_name: str
     enabled: bool = True
+    platform: str = "xianyu"
     keyword: str
     description: Optional[str] = ""
     analyze_images: bool = True
@@ -229,6 +243,7 @@ class TaskUpdate(BaseModel):
 
     task_name: Optional[str] = None
     enabled: Optional[bool] = None
+    platform: Optional[str] = None
     keyword: Optional[str] = None
     description: Optional[str] = None
     analyze_images: Optional[bool] = None
@@ -296,6 +311,7 @@ class TaskGenerateRequest(BaseModel):
 
     task_name: str
     keyword: str
+    platform: str = "xianyu"
     description: Optional[str] = ""
     analyze_images: bool = True
     personal_only: bool = True

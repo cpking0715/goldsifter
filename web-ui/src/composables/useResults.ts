@@ -6,6 +6,7 @@ import * as resultsApi from '@/api/results'
 import type { GetResultContentParams } from '@/api/results'
 import { useWebSocket } from '@/composables/useWebSocket'
 import * as tasksApi from '@/api/tasks'
+import { parseResultFilename, platformLabel } from '@/lib/platform'
 
 export function useResults() {
   const { t } = useI18n()
@@ -55,8 +56,9 @@ export function useResults() {
     return value.trim().toLowerCase().replace(/\s+/g, '_')
   }
 
-  function getKeywordFromFilename(filename: string) {
-    return filename.replace(/_full_data\.jsonl$/i, '').toLowerCase()
+  function resultFileKey(filename: string) {
+    const parsed = parseResultFilename(filename)
+    return `${parsed.platform}:${normalizeKeyword(parsed.keyword)}`
   }
 
   // Methods
@@ -146,7 +148,8 @@ export function useResults() {
       const mapping: Record<string, string> = {}
       tasks.forEach((task) => {
         if (task.keyword) {
-          mapping[normalizeKeyword(task.keyword)] = task.task_name
+          const platform = task.platform || 'xianyu'
+          mapping[`${platform}:${normalizeKeyword(task.keyword)}`] = task.task_name
         }
       })
       taskNameByKeyword.value = mapping
@@ -193,9 +196,13 @@ export function useResults() {
     }
   }
 
-  function exportSelectedResults() {
+  async function exportSelectedResults() {
     if (!selectedFile.value) return
-    resultsApi.downloadResultExport(selectedFile.value, { ...filters })
+    try {
+      await resultsApi.downloadResultExport(selectedFile.value, { ...filters })
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+    }
   }
 
   async function deleteSelectedFile(filename?: string) {
@@ -275,13 +282,15 @@ export function useResults() {
 
   const fileOptions = computed(() =>
     files.value.map((file) => {
-      const keyword = getKeywordFromFilename(file)
-      const taskName = taskNameByKeyword.value[keyword]
+      const parsed = parseResultFilename(file)
+      const taskName = taskNameByKeyword.value[resultFileKey(file)]
+      const task = taskName || t('common.unnamed')
       return {
         value: file,
-        taskName: taskName || t('common.unnamed'),
-        label: t('results.filters.taskNameLabel', {
-          task: taskName || t('common.unnamed'),
+        taskName: task,
+        label: t('results.filters.fileLabel', {
+          platform: platformLabel(parsed.platform),
+          task,
         }),
       }
     })

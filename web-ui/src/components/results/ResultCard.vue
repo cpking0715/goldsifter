@@ -12,6 +12,7 @@ import {
 import Badge from '@/components/ui/badge/Badge.vue'
 import { ExternalLink, TrendingUp, TrendingDown, Info, User, Clock, CheckCircle2, XCircle, AlertCircle, EyeOff, Eye } from 'lucide-vue-next'
 import { formatDateTime } from '@/i18n'
+import { platformLabel } from '@/lib/platform'
 
 interface Props {
   item: ResultItem
@@ -70,6 +71,9 @@ const expanded = ref(false)
       </div>
       <!-- Overlays -->
       <div class="absolute top-3 left-3 flex gap-2">
+        <Badge variant="secondary" class="border-none bg-slate-900/75 text-white shadow-sm backdrop-blur-md">
+          {{ platformLabel(props.item['来源平台']) }}
+        </Badge>
         <Badge v-if="isRecommended && !isHidden" variant="default" class="bg-emerald-500/90 backdrop-blur-md border-none shadow-sm">
           {{ t('results.card.curated') }}
         </Badge>

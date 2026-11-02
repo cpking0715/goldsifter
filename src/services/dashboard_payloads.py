@@ -7,10 +7,8 @@ from datetime import datetime
 from typing import Any
 
 from src.domain.models.task import Task
+from src.infrastructure.persistence.storage_names import normalize_keyword_from_filename
 from src.services.price_history_service import parse_price_value
-from src.services.result_file_service import (
-    normalize_keyword_from_filename,
-)
 from src.services.result_storage_service import load_result_summary
 
 

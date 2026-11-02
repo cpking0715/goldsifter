@@ -7,6 +7,7 @@ import asyncio
 import json
 from typing import List, Optional
 
+from src.collectors.platforms import normalize_platform
 from src.domain.models.task import Task
 from src.domain.repositories.task_repository import TaskRepository
 from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
@@ -21,6 +22,7 @@ def _row_to_task(row) -> Task:
     payload["free_shipping"] = bool(payload["free_shipping"])
     payload["is_running"] = bool(payload["is_running"])
     payload["keyword_rules"] = json.loads(payload.pop("keyword_rules_json") or "[]")
+    payload["platform"] = normalize_platform(payload.get("platform"))
     return Task(**payload)
 
 
@@ -88,13 +90,13 @@ class SqliteTaskRepository(TaskRepository):
             conn.execute(
                 """
                 INSERT OR REPLACE INTO tasks (
-                    id, task_name, enabled, keyword, description, analyze_images,
+                    id, task_name, enabled, platform, keyword, description, analyze_images,
                     max_pages, personal_only, min_price, max_price, cron,
                     ai_prompt_base_file, ai_prompt_criteria_file, account_state_file,
                     account_strategy, free_shipping, new_publish_option, region,
                     decision_mode, keyword_rules_json, is_running
                 ) VALUES (
-                    :id, :task_name, :enabled, :keyword, :description, :analyze_images,
+                    :id, :task_name, :enabled, :platform, :keyword, :description, :analyze_images,
                     :max_pages, :personal_only, :min_price, :max_price, :cron,
                     :ai_prompt_base_file, :ai_prompt_criteria_file, :account_state_file,
                     :account_strategy, :free_shipping, :new_publish_option, :region,
@@ -127,6 +129,7 @@ class SqliteTaskRepository(TaskRepository):
         values["personal_only"] = int(task.personal_only)
         values["free_shipping"] = int(task.free_shipping)
         values["is_running"] = int(task.is_running)
+        values["platform"] = task.platform or "xianyu"
         values["keyword_rules_json"] = json.dumps(task.keyword_rules or [], ensure_ascii=False)
         values.pop("keyword_rules", None)
         return values

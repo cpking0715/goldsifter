@@ -7,9 +7,10 @@ import signal
 import contextlib
 import re
 
+from src.collectors.platforms import normalize_platform, platform_requires_login
+from src.collectors.registry import get_collector
 from src.config import STATE_FILE
 from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
-from src.scraper import scrape_xianyu
 
 
 async def main():
@@ -92,12 +93,19 @@ async def main():
         return False
 
     if not os.path.exists(STATE_FILE) and not has_bound_account(tasks_config) and not has_any_state_file():
-        sys.exit(
-            f"错误: 未找到登录状态文件。请在 state/ 中添加账号或配置 account_state_file。"
-        )
+        # 仅当存在需要登录态的平台任务时才强制退出（孔夫子等平台无需登录态）
+        login_required_tasks = [
+            task for task in tasks_config
+            if task.get("enabled", False) and platform_requires_login(task.get("platform"))
+        ]
+        if login_required_tasks:
+            sys.exit(
+                f"错误: 未找到登录状态文件。请在 state/ 中添加账号或配置 account_state_file。"
+            )
 
     # 读取所有prompt文件内容（关键词模式不需要加载prompt）
     for task in tasks_config:
+        task["platform"] = normalize_platform(task.get("platform"))
         decision_mode = str(task.get("decision_mode", "ai")).strip().lower()
         if decision_mode not in {"ai", "keyword"}:
             decision_mode = "ai"
@@ -187,9 +195,21 @@ async def main():
             pass
 
     tasks = []
+    queued_task_names = []
     for task_conf in active_task_configs:
-        print(f"-> 任务 '{task_conf['task_name']}' 已加入执行队列。")
-        tasks.append(asyncio.create_task(scrape_xianyu(task_config=task_conf, debug_limit=args.debug_limit)))
+        platform = task_conf.get("platform") or "xianyu"
+        try:
+            collector = get_collector(platform)
+        except ValueError as e:
+            print(f"错误: 任务 '{task_conf['task_name']}' {e}")
+            continue
+        print(f"-> 任务 '{task_conf['task_name']}'（平台: {platform}）已加入执行队列。")
+        queued_task_names.append(task_conf['task_name'])
+        tasks.append(
+            asyncio.create_task(
+                collector.collect(task_config=task_conf, debug_limit=args.debug_limit)
+            )
+        )
 
     async def _shutdown_watcher():
         await stop_event.wait()
@@ -210,7 +230,7 @@ async def main():
 
     print("\n--- 所有任务执行完毕 ---")
     for i, result in enumerate(results):
-        task_name = active_task_configs[i]['task_name']
+        task_name = queued_task_names[i] if i < len(queued_task_names) else "未知任务"
         if isinstance(result, Exception):
             print(f"任务 '{task_name}' 因异常而终止: {result}")
         else:

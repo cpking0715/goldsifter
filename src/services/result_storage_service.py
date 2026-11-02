@@ -147,11 +147,11 @@ def _load_filtered_records_from_conn(
     return records
 
 
-async def save_result_record(record: dict, keyword: str) -> bool:
-    return await asyncio.to_thread(_save_result_record_sync, record, keyword)
+async def save_result_record(record: dict, keyword: str, platform: str = "xianyu") -> bool:
+    return await asyncio.to_thread(_save_result_record_sync, record, keyword, platform)
 
 
-def _save_result_record_sync(record: dict, keyword: str) -> bool:
+def _save_result_record_sync(record: dict, keyword: str, platform: str) -> bool:
     bootstrap_sqlite_storage()
     item = record.get("商品信息", {}) or {}
     analysis = record.get("ai_analysis", {}) or {}
@@ -173,7 +173,7 @@ def _save_result_record_sync(record: dict, keyword: str) -> bool:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                build_result_filename(keyword),
+                build_result_filename(keyword, platform),
                 record.get("搜索关键字", keyword),
                 record.get("任务名称", ""),
                 record.get("爬取时间", ""),
@@ -195,9 +195,9 @@ def _save_result_record_sync(record: dict, keyword: str) -> bool:
     return True
 
 
-def load_processed_link_keys(keyword: str) -> set[str]:
+def load_processed_link_keys(keyword: str, platform: str = "xianyu") -> set[str]:
     bootstrap_sqlite_storage()
-    filename = build_result_filename(keyword)
+    filename = build_result_filename(keyword, platform)
     with sqlite_connection() as conn:
         rows = conn.execute(
             "SELECT link_unique_key FROM result_items WHERE result_filename = ?",

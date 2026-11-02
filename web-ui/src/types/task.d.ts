@@ -4,6 +4,7 @@ export interface Task {
   id: number;
   task_name: string;
   enabled: boolean;
+  platform?: string;
   keyword: string;
   description: string;
   analyze_images: boolean;
@@ -59,6 +60,7 @@ export type TaskUpdate = Partial<Omit<Task, 'id' | 'next_run_at'>>;
 export interface TaskGenerateRequest {
   task_name: string;
   keyword: string;
+  platform?: string;
   description?: string;
   analyze_images?: boolean;
   personal_only?: boolean;

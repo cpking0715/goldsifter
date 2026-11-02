@@ -48,7 +48,11 @@ def test_cli_runs_single_task_with_prompt(tmp_path, load_json_fixture, monkeypat
         assert "Criteria text for A7M4." in task_config["ai_prompt_text"]
         return 1
 
-    monkeypatch.setattr(spider_v2, "scrape_xianyu", fake_scrape_xianyu)
+    monkeypatch.setattr(
+        spider_v2,
+        "get_collector",
+        lambda platform: types.SimpleNamespace(platform_id=platform, collect=fake_scrape_xianyu),
+    )
     monkeypatch.setattr(sys, "argv", ["spider_v2.py", "--config", str(config_path), "--task-name", "Sony A7M4"])
 
     asyncio.run(spider_v2.main())
@@ -87,7 +91,11 @@ def test_cli_runs_keyword_mode_without_prompt_files(tmp_path, load_json_fixture,
         captured.append(task_config)
         return 1
 
-    monkeypatch.setattr(spider_v2, "scrape_xianyu", fake_scrape_xianyu)
+    monkeypatch.setattr(
+        spider_v2,
+        "get_collector",
+        lambda platform: types.SimpleNamespace(platform_id=platform, collect=fake_scrape_xianyu),
+    )
     monkeypatch.setattr(sys, "argv", ["spider_v2.py", "--config", str(config_path), "--task-name", "Sony A7M4"])
 
     asyncio.run(spider_v2.main())

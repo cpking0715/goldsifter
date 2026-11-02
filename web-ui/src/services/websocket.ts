@@ -10,7 +10,7 @@ class WebSocketService {
   constructor() {
     // 延迟连接，等待认证完成
     // 只有在已登录时才尝试连接
-    if (localStorage.getItem('auth_logged_in') === 'true') {
+    if (localStorage.getItem('auth_token')) {
       this.connect();
     }
   }
@@ -33,13 +33,16 @@ class WebSocketService {
   }
 
   private connect() {
+    const token = localStorage.getItem('auth_token');
+    if (!token) return;
+
     // Determine the protocol (ws or wss) based on the current page protocol
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host; // This includes port if present
 
-    const url = `${protocol}//${host}/ws`;
+    const url = `${protocol}//${host}/ws?token=${encodeURIComponent(token)}`;
 
-    console.log(`Connecting to WebSocket at ${url}`);
+    console.log(`Connecting to WebSocket at ${protocol}//${host}/ws`);
     this.ws = new WebSocket(url);
 
     this.ws.onopen = () => {
@@ -67,7 +70,7 @@ class WebSocketService {
         this.emit('disconnected', { isConnected: false });
       }
       // 只有在 shouldConnect 为 true 或已登录时才重连
-      if (this.shouldConnect || localStorage.getItem('auth_logged_in') === 'true') {
+      if (this.shouldConnect || localStorage.getItem('auth_token')) {
         setTimeout(() => this.connect(), this.reconnectInterval);
       }
     };

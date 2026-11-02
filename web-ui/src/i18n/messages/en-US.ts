@@ -4,6 +4,10 @@ const enUS = {
   app: {
     name: 'Goofish Monitor',
   },
+  platforms: {
+    xianyu: 'Xianyu',
+    kongfz: 'Kongfz',
+  },
   locale: {
     switchLabel: 'Switch language',
     zh: '中文',
@@ -141,6 +145,7 @@ const enUS = {
       noResults: 'No results yet. Run a task first.',
       chooseResult: 'Select a task result',
       taskNameLabel: 'Task: {task}',
+      fileLabel: '{platform} · {task}',
       sortByCrawlTime: 'Crawl Time',
       sortByPublishTime: 'Publish Time',
       sortByPrice: 'Price',

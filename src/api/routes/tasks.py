@@ -230,15 +230,17 @@ async def delete_task(
     await _reload_scheduler_if_needed(service, scheduler_service)
     try:
         keyword = (task.keyword or "").strip()
+        platform = task.platform or "xianyu"
         if keyword:
             remaining_tasks = await service.get_all_tasks()
             keyword_still_in_use = any(
                 (remaining_task.keyword or "").strip() == keyword
+                and (remaining_task.platform or "xianyu") == platform
                 for remaining_task in remaining_tasks
             )
             if not keyword_still_in_use:
-                await delete_result_file_records(build_result_filename(keyword))
-                delete_price_snapshots(keyword)
+                await delete_result_file_records(build_result_filename(keyword, platform))
+                delete_price_snapshots(keyword, platform=platform)
     except Exception as e:
         print(f"删除任务结果文件时出错: {e}")
 

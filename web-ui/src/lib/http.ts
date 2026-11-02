@@ -1,4 +1,4 @@
-import { useAuth } from '@/composables/useAuth'
+import { getAuthToken, useAuth } from '@/composables/useAuth'
 
 interface FetchOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;
@@ -8,6 +8,10 @@ export async function http(url: string, options: FetchOptions = {}) {
   const { logout } = useAuth()
   
   const headers = new Headers(options.headers)
+  const token = getAuthToken()
+  if (token && !headers.has('Authorization') && !headers.has('X-Auth-Token')) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
 
   // Handle Query Params
   let fullUrl = url

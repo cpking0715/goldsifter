@@ -8,6 +8,7 @@ from enum import Enum
 from pydantic import BaseModel
 from urllib.parse import quote
 
+from src.infrastructure.persistence.storage_names import parse_result_filename
 from src.services.price_history_service import build_price_history_insights
 from src.services.result_export_service import build_results_csv
 from src.services.result_file_service import (
@@ -130,9 +131,11 @@ async def get_result_file_content(
 async def get_result_file_insights(filename: str):
     try:
         validate_result_filename(filename)
-        keyword = filename.replace("_full_data.jsonl", "")
+        platform, keyword = parse_result_filename(filename)
         visible_item_ids = load_visible_result_item_ids(filename)
-        return build_price_history_insights(keyword, visible_item_ids=visible_item_ids)
+        return build_price_history_insights(
+            keyword, visible_item_ids=visible_item_ids, platform=platform
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

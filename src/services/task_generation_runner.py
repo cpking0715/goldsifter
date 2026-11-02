@@ -23,6 +23,7 @@ def build_task_create(req: TaskGenerateRequest, criteria_file: str) -> TaskCreat
     return TaskCreate(
         task_name=req.task_name,
         enabled=True,
+        platform=req.platform or "xianyu",
         keyword=req.keyword,
         description=req.description or "",
         analyze_images=req.analyze_images,

@@ -4,6 +4,10 @@ const zhCN = {
   app: {
     name: '闲鱼智能监控',
   },
+  platforms: {
+    xianyu: '闲鱼',
+    kongfz: '孔夫子旧书网',
+  },
   locale: {
     switchLabel: '切换语言',
     zh: '中文',
@@ -141,6 +145,7 @@ const zhCN = {
       noResults: '暂无结果，请先运行任务',
       chooseResult: '请选择任务结果',
       taskNameLabel: '任务名称：{task}',
+      fileLabel: '{platform} · {task}',
       sortByCrawlTime: '按爬取时间',
       sortByPublishTime: '按发布时间',
       sortByPrice: '按价格',

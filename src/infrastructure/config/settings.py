@@ -103,6 +103,8 @@ class AppSettings(_EnvSettings):
     server_port: int = _env_field(8000, "SERVER_PORT")
     web_username: str = _env_field("admin", "WEB_USERNAME")
     web_password: str = _env_field("admin123", "WEB_PASSWORD")
+    # Web token 签名密钥；缺省从账密派生（改账密即吊销全部 token）
+    web_auth_secret: Optional[str] = _env_field(None, "WEB_AUTH_SECRET")
     task_log_retention_days: int = _env_field(7, "TASK_LOG_RETENTION_DAYS", ge=1)
 
     # 文件路径配置

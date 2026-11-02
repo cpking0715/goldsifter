@@ -1,4 +1,5 @@
 import type { ResultInsights, ResultItem } from '@/types/result.d.ts'
+import { getAuthToken, useAuth } from '@/composables/useAuth'
 import { http } from '@/lib/http'
 
 export interface GetResultContentParams {
@@ -55,14 +56,28 @@ export function buildResultExportUrl(filename: string, params: GetResultContentP
   return `/api/results/${encodeURIComponent(filename)}/export${queryString ? `?${queryString}` : ''}`
 }
 
-export function downloadResultExport(filename: string, params: GetResultContentParams = {}) {
+export async function downloadResultExport(filename: string, params: GetResultContentParams = {}) {
   const url = buildResultExportUrl(filename, params)
+  const token = getAuthToken()
+  const response = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (response.status === 401) {
+    useAuth().logout()
+    throw new Error('Unauthorized')
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const objectUrl = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  link.href = url
-  link.download = ''
+  link.href = objectUrl
+  link.download = filename.replace(/\.jsonl$/i, '.csv')
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+  URL.revokeObjectURL(objectUrl)
 }
 
 export async function updateItemStatus(filename: string, itemId: string, status: string): Promise<{ message: string; status: string }> {

@@ -1125,6 +1125,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                     ),
                                     "商品信息": item_data,
                                     "卖家信息": {},
+                                    "来源平台": "xianyu",
                                 }
                                 price_reference = build_market_reference(
                                     keyword=keyword,

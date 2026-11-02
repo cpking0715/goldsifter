@@ -26,6 +26,7 @@ SCHEMA_STATEMENTS = (
         id INTEGER PRIMARY KEY,
         task_name TEXT NOT NULL,
         enabled INTEGER NOT NULL,
+        platform TEXT NOT NULL DEFAULT 'xianyu',
         keyword TEXT NOT NULL,
         description TEXT,
         analyze_images INTEGER NOT NULL,
@@ -143,7 +144,25 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         conn.execute(statement)
     _migrate_result_items_status(conn)
+    _migrate_tasks_platform(conn)
     conn.commit()
+
+
+def _migrate_tasks_platform(conn: sqlite3.Connection) -> None:
+    """为 tasks 表添加 platform 列（仅执行一次，旧任务默认闲鱼）。"""
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE key = 'migration:tasks_platform'"
+    ).fetchone()
+    if row is not None:
+        return
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()]
+    if "platform" not in cols:
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN platform TEXT NOT NULL DEFAULT 'xianyu'"
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(key, value) VALUES ('migration:tasks_platform', 'done')"
+    )
 
 
 def _migrate_result_items_status(conn: sqlite3.Connection) -> None:

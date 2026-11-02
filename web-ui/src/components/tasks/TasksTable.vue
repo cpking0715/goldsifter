@@ -28,6 +28,7 @@ import {
   Search
 } from 'lucide-vue-next'
 import { formatCountdown, formatNextRunAbsolute } from '@/lib/taskSchedule'
+import { platformLabel, platformNeedsLogin } from '@/lib/platform'
 
 interface Props {
   tasks: Task[]
@@ -39,6 +40,7 @@ const props = defineProps<Props>()
 const { t } = useI18n()
 const isStopping = (id: number) => props.stoppingIds?.has(id) ?? false
 const isKeywordMode = (task: Task) => task.decision_mode === 'keyword'
+const showAccount = (task: Task) => platformNeedsLogin(task.platform)
 const nowMs = ref(Date.now())
 let timer: number | null = null
 
@@ -121,6 +123,9 @@ const emit = defineEmits<{
                 <h3 class="truncate text-base font-black tracking-tight text-slate-900">
                   {{ task.task_name }}
                 </h3>
+                <Badge variant="outline" class="border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                  {{ platformLabel(task.platform) }}
+                </Badge>
                 <Badge
                   variant="outline"
                   :class="[
@@ -168,10 +173,10 @@ const emit = defineEmits<{
                 ¥{{ task.min_price || 0 }} - {{ task.max_price || 'MAX' }}
               </p>
               <div class="mt-2 flex flex-wrap gap-1.5">
-                <Badge variant="outline" class="border-slate-200/70 bg-slate-50 text-slate-500">
+                <Badge v-if="showAccount(task)" variant="outline" class="border-slate-200/70 bg-slate-50 text-slate-500">
                   {{ task.personal_only ? t('tasks.table.personalOnly') : t('common.all') }}
                 </Badge>
-                <Badge variant="outline" class="border-slate-200/70 bg-slate-50 text-slate-500">
+                <Badge v-if="showAccount(task)" variant="outline" class="border-slate-200/70 bg-slate-50 text-slate-500">
                   {{ task.free_shipping ? t('tasks.table.freeShipping') : t('common.all') }}
                 </Badge>
                 <Badge v-if="task.region" variant="outline" class="border-slate-200/70 bg-slate-50 text-slate-500">
@@ -210,7 +215,8 @@ const emit = defineEmits<{
                     {{ t('tasks.table.headers.mode') }}
                   </p>
                   <p class="mt-2 text-sm font-semibold text-slate-700">
-                    {{ resolveAccountStrategyLabel(task) }} · {{ resolveAccountName(task) }}
+                    <template v-if="showAccount(task)">{{ resolveAccountStrategyLabel(task) }} · {{ resolveAccountName(task) }}</template>
+                    <template v-else>{{ platformLabel(task.platform) }}</template>
                   </p>
                 </div>
 
@@ -345,6 +351,9 @@ const emit = defineEmits<{
               <div class="flex flex-col gap-1.5 py-1">
                 <div class="flex items-center gap-2">
                   <span class="text-base font-black text-slate-800 tracking-tight group-hover:text-primary transition-colors">{{ task.task_name }}</span>
+                  <Badge variant="outline" class="h-4 border-slate-200 bg-white px-1.5 text-[9px] font-semibold text-slate-500">
+                    {{ platformLabel(task.platform) }}
+                  </Badge>
                   <Badge 
                     variant="outline" 
                     :class="[
@@ -366,7 +375,7 @@ const emit = defineEmits<{
                    </div>
                 </div>
 
-                <div class="flex items-center gap-2 mt-0.5">
+                <div v-if="showAccount(task)" class="flex items-center gap-2 mt-0.5">
                    <div class="flex items-center gap-1 text-[10px] font-bold text-slate-400 uppercase tracking-tight">
                       <User class="w-3 h-3" /> {{ resolveAccountStrategyLabel(task) }}
                    </div>
@@ -388,10 +397,10 @@ const emit = defineEmits<{
                   </span>
                 </div>
                 <div class="flex flex-wrap gap-1.5">
-                  <Badge variant="outline" class="text-[9px] h-4 border-slate-100 text-slate-400 px-1.5 font-bold bg-white/40">
+                  <Badge v-if="showAccount(task)" variant="outline" class="text-[9px] h-4 border-slate-100 text-slate-400 px-1.5 font-bold bg-white/40">
                     {{ task.personal_only ? t('tasks.table.personalOnly') : t('common.all') }}
                   </Badge>
-                  <Badge variant="outline" class="text-[9px] h-4 border-slate-100 text-slate-400 px-1.5 font-bold bg-white/40">
+                  <Badge v-if="showAccount(task)" variant="outline" class="text-[9px] h-4 border-slate-100 text-slate-400 px-1.5 font-bold bg-white/40">
                     {{ task.free_shipping ? t('tasks.table.freeShipping') : t('common.all') }}
                   </Badge>
                   <div v-if="task.region" class="flex items-center gap-0.5 text-[9px] font-bold text-slate-400 px-1.5 h-4 bg-slate-50/50 rounded border border-slate-100 truncate max-w-[80px]">
