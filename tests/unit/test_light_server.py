@@ -118,3 +118,26 @@ def test_update_latest_default_and_file(light_server, tmp_path, monkeypatch):
     monkeypatch.setattr(server_app, "UPDATE_FILE", update_file)
     assert light_server.get("/api/v1/update/latest").json()["version"] == "1.2.0"
     assert light_server.get("/api/v1/update/latest?channel=beta").json()["version"] == "1.3.0-beta1"
+
+
+def test_license_rate_limit(light_server):
+    """同一 IP 高频激活被 429 限流。"""
+    server_app._RATE_BUCKETS.clear()  # 测试隔离：清空限流桶
+    issued = _issue(light_server, max_devices=10)
+    codes = []
+    for i in range(12):
+        resp = light_server.post(
+            "/api/v1/license/activate",
+            json={"key": issued["key"], "device_id": f"device-{i:04d}-abcdefghijklmnop"[:24]},
+        )
+        codes.append(resp.status_code)
+    assert codes.count(200) == 10
+    assert codes.count(429) >= 1
+
+
+def test_telemetry_rate_limit(light_server):
+    server_app._RATE_BUCKETS.clear()  # 测试隔离：清空限流桶
+    body = {"items": [{"platform": "kongfz", "keyword": "k", "price": 1.0, "captured_at": "2026-11-02T10:00:00"}]}
+    codes = [light_server.post("/api/v1/telemetry/snapshots", json=body).status_code for _ in range(25)]
+    assert codes.count(200) == 20
+    assert codes.count(429) >= 1

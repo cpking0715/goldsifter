@@ -89,7 +89,20 @@ def _write_json(path: Path, payload) -> None:
 
 
 def _http_client() -> httpx.AsyncClient:
-    # 轻服务端为 tls internal 自签证书，客户端跳过校验
+    """云客户端：优先用 pin 的根 CA 验证服务端身份；未配置时退化为跳过校验。
+
+    trust_env=False：云服务为国内直连目标，不走系统代理——
+    代理若为 MITM 型会用自签证书重签，与 CA pin 冲突。
+    """
+    ca_file = _env("QT_CLOUD_CA_FILE")
+    if ca_file and os.path.isfile(ca_file):
+        import ssl
+
+        # 严格 pin：仅信任指定根 CA（不加载系统 CA，公共 CA 签发的证书也不能通过）
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.load_verify_locations(cafile=ca_file)
+        return httpx.AsyncClient(verify=ctx, trust_env=False, timeout=8.0, follow_redirects=True)
+    # 轻服务端为 tls internal 自签证书且未配 CA 时跳过校验（发布版应配置 CA pin）
     return httpx.AsyncClient(verify=False, timeout=8.0, follow_redirects=True)
 
 

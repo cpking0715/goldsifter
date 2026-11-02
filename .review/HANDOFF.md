@@ -60,6 +60,24 @@ src/{scraper,ai_handler,prompt_utils}.py、spider_v2.py、server/app.py（新）
 6. **AI 双路径降级**（ai_handler.py / ai_client.py）：降级后 1024 截断分析 JSON 的容错；两条路径逻辑重复的偏差。
 7. 子进程 spawn（process_service）命令构造是否有注入面；任务名进日志文件名的清洗。
 
-## findings 台账
+## findings 台账（Cursor 12 条 + 自审计 5 条，2026-11-03）
 
-（审阅后回填：fixed / rejected(理由) / open）
+| # | 来源 | 严重度 | 问题 | 状态 |
+|---|------|--------|------|------|
+| 1 | Cursor major | auth.py compare_digest 长度不等抛 ValueError→500 | **fixed**（先比长度） |
+| 2 | Cursor major | 默认账密派生 HMAC 密钥可离线伪造 token | **rejected**：伪造材料=账密本身，与登录接口攻击门槛完全等效，无增益；建议改默认账密/配 WEB_AUTH_SECRET（文档已提示） |
+| 3-5 | Cursor major×3 | kongfuz__ 前缀/slug 理论碰撞致跨平台串读误标 | **open**：需用户刻意以 kongfuz_ 前缀命名闲鱼关键词才触发，数据质量问题非安全漏洞；Phase 2 快照表加 platform 列彻底解决 |
+| 6 | Cursor major | telemetry 无配额可灌爆磁盘 | **fixed**（每 IP 20/min 限流 + 全局日 20 万/总量 500 万配额，429） |
+| 7 | Cursor major | License 激活 COUNT+INSERT 竞态 | **fixed**（BEGIN IMMEDIATE 写锁互斥） |
+| 8 | Cursor major | verify=False 可 MITM | **fixed**（严格 CA pin：ca/qiantao-cloud-root.crt + SSLContext 不加载系统 CA + trust_env=False 直连；正反双向实测） |
+| 9 | Cursor minor | admin token compare 长度异常→500 | **fixed** |
+| 10 | Cursor minor | 登录 == 非恒定时间 | **fixed**（compare_digest） |
+| 11 | Cursor minor | AI 双路径截断 JSON 容错不一致 | **open**：实际调用面为零（analyze 无调用方），双路径合并重构时处理 |
+| 12 | Cursor minor | results 下载 200+error 不一致 | **rejected**：上游既有行为，柔性 fork 原则不动 |
+| A | 自审计 medium | 轻服务端无速率限制 | **fixed**（IP 滑动窗口限流，tx-51 实测第 11 次 429） |
+| B | 自审计 minor | WS token 走 query（反代日志可见） | **open**：本地部署影响小，公网部署需注意 |
+| C | 自审计 minor | parse_result_filename 前缀误判 | **open**（同 #3 合并处理） |
+| D | 自审计 info | 确认项 | SQL 参数化/无 v-html/spawn 无 shell/git 历史干净/.env 未跟踪/prompts 穿越防护 ✓ |
+
+修复验证：pytest 155 通过/6 上游既有失败；tx-51 部署后限流/健康实测；客户端严格 pin 正反验证；
+验收冒烟矩阵 12/12（孔夫子全链路/去重/insights/WS/闲鱼守卫/云闭环/license 重激活）。

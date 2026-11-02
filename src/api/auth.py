@@ -71,7 +71,8 @@ def verify_token(token: str) -> bool:
         return False
 
     expected = _sign(payload_bytes, _get_secret())
-    if not hmac.compare_digest(signature, expected):
+    # compare_digest 对长度不等的 bytes 抛异常，先比长度保证畸形 token 稳定返回 False
+    if len(signature) != len(expected) or not hmac.compare_digest(signature, expected):
         return False
     try:
         payload = json.loads(payload_bytes.decode("utf-8"))

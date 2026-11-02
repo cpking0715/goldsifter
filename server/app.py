@@ -16,12 +16,14 @@ import os
 import secrets
 import sqlite3
 import string
+import time
+from collections import defaultdict, deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 DB_PATH = os.getenv("QT_DB_PATH", "server_data/app.sqlite3")
@@ -88,6 +90,54 @@ def generate_license_key() -> str:
 
 
 # ---------------------------------------------------------------------------
+# 内存滑动窗口限流（单进程部署足够；防公网无限打 telemetry/license 端点）
+# ---------------------------------------------------------------------------
+
+_RATE_BUCKETS: dict[str, deque] = defaultdict(deque)
+_RATE_BUCKET_GC_SIZE = 10000
+
+# 众包数据配额：防止持续灌数据撑爆磁盘/污染行情（多 IP 也受全局上限约束）
+TELEMETRY_DAILY_LIMIT = 200_000
+TELEMETRY_TOTAL_LIMIT = 5_000_000
+_telemetry_counter: dict[str, object] = {"day": "", "count": 0, "calibrated": False}
+
+
+def _rate_limit(request: Request, bucket: str, limit: int, window_seconds: int = 60) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    key = f"{bucket}:{client_ip}"
+    now = time.monotonic()
+    queue = _RATE_BUCKETS[key]
+    while queue and now - queue[0] > window_seconds:
+        queue.popleft()
+    if len(queue) >= limit:
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    queue.append(now)
+    if len(_RATE_BUCKETS) > _RATE_BUCKET_GC_SIZE:
+        _RATE_BUCKETS.clear()
+
+
+def _enforce_telemetry_quota(conn: sqlite3.Connection) -> None:
+    """每日 + 总量配额（内存计数，重启后按 DB 校准一次）。"""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _telemetry_counter["day"] != today:
+        _telemetry_counter["day"] = today
+        _telemetry_counter["count"] = 0
+        _telemetry_counter["calibrated"] = False
+    if not _telemetry_counter["calibrated"]:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM market_snapshots WHERE received_at >= ?",
+            (today,),
+        ).fetchone()
+        _telemetry_counter["count"] = int(row["c"])
+        _telemetry_counter["calibrated"] = True
+    if int(_telemetry_counter["count"]) >= TELEMETRY_DAILY_LIMIT:
+        raise HTTPException(status_code=429, detail="今日行情回传配额已满")
+    total = conn.execute("SELECT COUNT(*) AS c FROM market_snapshots").fetchone()["c"]
+    if int(total) >= TELEMETRY_TOTAL_LIMIT:
+        raise HTTPException(status_code=429, detail="行情数据总量已达上限，请联系管理员")
+
+
+# ---------------------------------------------------------------------------
 # 基础
 # ---------------------------------------------------------------------------
 
@@ -134,16 +184,20 @@ def _license_payload(row, device_id: str) -> dict:
 def _require_admin(x_admin_token: Optional[str]) -> None:
     if not ADMIN_TOKEN:
         raise HTTPException(status_code=503, detail="服务端未配置管理令牌（QT_ADMIN_TOKEN）")
-    if not x_admin_token or not secrets.compare_digest(x_admin_token, ADMIN_TOKEN):
+    supplied = x_admin_token or ""
+    # 长度先比，避免 compare_digest 长度不等时抛异常导致 500
+    if len(supplied) != len(ADMIN_TOKEN) or not secrets.compare_digest(supplied, ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="管理令牌无效")
 
 
 @app.post("/api/v1/admin/licenses")
 async def issue_license(
     req: LicenseIssueRequest,
+    request: Request,
     x_admin_token: Optional[str] = Header(default=None),
 ):
     """发放 License key（仅管理令牌可调用）。"""
+    _rate_limit(request, "admin", limit=10)
     _require_admin(x_admin_token)
     key = generate_license_key()
     expires_at = (
@@ -163,9 +217,13 @@ def _now_ts() -> datetime:
 
 
 @app.post("/api/v1/license/activate")
-async def activate_license(req: LicenseActivateRequest):
+async def activate_license(req: LicenseActivateRequest, request: Request):
     """激活 License 到指定设备；超设备数返回 403。"""
+    _rate_limit(request, "license", limit=10)
     with db() as conn:
+        # 写锁互斥：防止多 worker 部署时 COUNT+INSERT 竞态突破 max_devices
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
         row = _load_license(conn, req.key)
         if not row:
             raise HTTPException(status_code=404, detail="License 不存在")
@@ -195,8 +253,9 @@ async def activate_license(req: LicenseActivateRequest):
 
 
 @app.post("/api/v1/license/verify")
-async def verify_license(req: LicenseActivateRequest):
+async def verify_license(req: LicenseActivateRequest, request: Request):
     """校验 License 与设备绑定状态；过期返回 ok=false（客户端进入离线宽限期）。"""
+    _rate_limit(request, "license", limit=10)
     with db() as conn:
         row = _load_license(conn, req.key)
         if not row:
@@ -254,10 +313,12 @@ class SnapshotBatch(BaseModel):
 
 
 @app.post("/api/v1/telemetry/snapshots")
-async def receive_snapshots(batch: SnapshotBatch):
+async def receive_snapshots(batch: SnapshotBatch, request: Request):
     """匿名行情快照回传（仅行情字段，禁止携带任何个人身份信息）。"""
+    _rate_limit(request, "telemetry", limit=20)
     received_at = _now()
     with db() as conn:
+        _enforce_telemetry_quota(conn)
         conn.executemany(
             "INSERT INTO market_snapshots"
             " (platform, keyword, price, title, quality, captured_at, received_at)"
@@ -271,4 +332,5 @@ async def receive_snapshots(batch: SnapshotBatch):
                 for it in batch.items
             ],
         )
+    _telemetry_counter["count"] = int(_telemetry_counter["count"]) + len(batch.items)
     return {"accepted": len(batch.items)}

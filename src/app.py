@@ -158,8 +158,16 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/status")
 async def auth_status(payload: LoginRequest):
-    """登录：校验账密并签发签名 token"""
-    if payload.username == app_settings.web_username and payload.password == app_settings.web_password:
+    """登录：校验账密并签发签名 token（恒定时间比较）"""
+    import secrets as _secrets
+
+    username_ok = _secrets.compare_digest(
+        payload.username.encode("utf-8"), str(app_settings.web_username or "").encode("utf-8")
+    )
+    password_ok = _secrets.compare_digest(
+        payload.password.encode("utf-8"), str(app_settings.web_password or "").encode("utf-8")
+    )
+    if username_ok and password_ok:
         token = create_access_token(payload.username)
         return {
             "authenticated": True,
