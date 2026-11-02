@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 千淘 · goldsifter：放大镜（监控）中淘出金子（吹尽狂沙始到金） -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FDE68A"/>
+      <stop offset="0.55" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="handle" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FBBF24"/>
+      <stop offset="1" stop-color="#B45309"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 深色圆角底 -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)"/>
+
+  <!-- 被筛走的沙粒 -->
+  <circle cx="49" cy="14" r="2.4" fill="#94A3B8" opacity="0.85"/>
+  <circle cx="55" cy="21" r="1.8" fill="#64748B" opacity="0.7"/>
+  <circle cx="12" cy="46" r="1.8" fill="#64748B" opacity="0.6"/>
+
+  <!-- 放大镜镜片 -->
+  <circle cx="27" cy="27" r="15.5" fill="#0B1220" stroke="#E2E8F0" stroke-width="3.5"/>
+  <circle cx="27" cy="27" r="12" fill="#111C33"/>
+
+  <!-- 镜片反光弧 -->
+  <path d="M 17.5 24 A 11 11 0 0 1 24 17.5" fill="none" stroke="#38BDF8" stroke-width="2" stroke-linecap="round" opacity="0.55"/>
+
+  <!-- 金块（不规则多边形） -->
+  <polygon points="27,17.5 34.5,22 33.5,31 27,36 20.5,30.5 19.5,22.5" fill="url(#gold)"/>
+  <!-- 金块棱面 -->
+  <polygon points="27,17.5 34.5,22 27,26" fill="#FDE68A" opacity="0.9"/>
+  <polygon points="27,36 20.5,30.5 27,26" fill="#B45309" opacity="0.55"/>
+  <!-- 高光 -->
+  <circle cx="24.5" cy="23" r="1.7" fill="#FFFBEB" opacity="0.95"/>
+
+  <!-- 手柄 -->
+  <line x1="38.5" y1="38.5" x2="51" y2="51" stroke="url(#handle)" stroke-width="6.5" stroke-linecap="round"/>
+</svg>

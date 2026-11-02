@@ -3,10 +3,11 @@
 整合所有路由和服务
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from src.api.auth import create_access_token, require_auth
 from src.api.routes import (
     dashboard,
     tasks,
@@ -17,6 +18,7 @@ from src.api.routes import (
     login_state,
     websocket,
     accounts,
+    platforms,
 )
 from src.api.dependencies import (
     set_process_service,
@@ -102,16 +104,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# 注册路由
-app.include_router(tasks.router)
-app.include_router(dashboard.router)
-app.include_router(logs.router)
-app.include_router(settings.router)
-app.include_router(prompts.router)
-app.include_router(results.router)
-app.include_router(login_state.router)
+# 注册路由（全部 /api/* 与 WebSocket 受 token 鉴权保护）
+_auth = [Depends(require_auth)]
+app.include_router(tasks.router, dependencies=_auth)
+app.include_router(dashboard.router, dependencies=_auth)
+app.include_router(logs.router, dependencies=_auth)
+app.include_router(settings.router, dependencies=_auth)
+app.include_router(prompts.router, dependencies=_auth)
+app.include_router(results.router, dependencies=_auth)
+app.include_router(login_state.router, dependencies=_auth)
+app.include_router(accounts.router, dependencies=_auth)
+app.include_router(platforms.router, dependencies=_auth)
+# WebSocket 在端点内校验 query token，不能套用读取 Authorization 头的 HTTP 依赖
 app.include_router(websocket.router)
-app.include_router(accounts.router)
 
 # 挂载静态文件
 # 旧的静态文件目录（用于截图等）
@@ -143,9 +148,15 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/status")
 async def auth_status(payload: LoginRequest):
-    """检查认证状态"""
+    """登录：校验账密并签发签名 token"""
     if payload.username == app_settings.web_username and payload.password == app_settings.web_password:
-        return {"authenticated": True, "username": payload.username}
+        token = create_access_token(payload.username)
+        return {
+            "authenticated": True,
+            "username": payload.username,
+            "token": token,
+            "expires_in": 7 * 24 * 3600,
+        }
     raise HTTPException(status_code=401, detail="认证失败")
 
 
