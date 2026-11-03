@@ -18,3 +18,4 @@ data/
 
 # ZCode 本地目录
 .zcode/
+build/

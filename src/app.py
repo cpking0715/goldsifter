@@ -148,6 +148,14 @@ async def health_check():
     return {"status": "healthy", "message": "服务正常运行"}
 
 
+# 站点图标（catch-all 会拒绝静态后缀，需显式路由；免认证）
+@app.get("/favicon.svg")
+async def favicon():
+    if os.path.exists("dist/favicon.svg"):
+        return FileResponse("dist/favicon.svg", media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="favicon 不存在")
+
+
 # 认证状态检查端点
 from fastapi import Request, HTTPException
 from fastapi.responses import FileResponse

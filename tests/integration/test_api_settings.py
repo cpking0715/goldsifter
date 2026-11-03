@@ -20,6 +20,7 @@ _SETTINGS_ENV_KEYS = [
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "OPENAI_MODEL_NAME",
+    "OPENAI_TEXT_MODEL_NAME",
     "SKIP_AI_ANALYSIS",
     "PROXY_URL",
     "NTFY_TOPIC_URL",
@@ -333,7 +334,10 @@ def test_ai_settings_fall_back_to_runtime_environment_when_env_file_missing(tmp_
 
     ai_response = client.get("/api/settings/ai")
     assert ai_response.status_code == 200
-    assert ai_response.json() == {
+    payload = ai_response.json()
+    # 未显式设置时文本模型为空串（不参与该用例的其余断言）
+    assert payload.pop("OPENAI_TEXT_MODEL_NAME", "") == ""
+    assert payload == {
         "OPENAI_BASE_URL": "https://runtime.example.com/v1",
         "OPENAI_MODEL_NAME": "runtime-model",
         "SKIP_AI_ANALYSIS": False,
