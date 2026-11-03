@@ -61,6 +61,7 @@ export interface AiSettings {
   OPENAI_API_KEY?: string
   OPENAI_BASE_URL?: string
   OPENAI_MODEL_NAME?: string
+  OPENAI_TEXT_MODEL_NAME?: string
   PROXY_URL?: string
 }
 

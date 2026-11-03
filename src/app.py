@@ -20,6 +20,7 @@ from src.api.routes import (
     accounts,
     platforms,
     cloud,
+    ai_providers,
 )
 from src.api.dependencies import (
     set_process_service,
@@ -125,6 +126,7 @@ app.include_router(login_state.router, dependencies=_auth)
 app.include_router(accounts.router, dependencies=_auth)
 app.include_router(platforms.router, dependencies=_auth)
 app.include_router(cloud.router, dependencies=_auth)
+app.include_router(ai_providers.router, dependencies=_auth)
 # WebSocket 在端点内校验 query token，不能套用读取 Authorization 头的 HTTP 依赖
 app.include_router(websocket.router)
 

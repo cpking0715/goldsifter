@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSettings } from '@/composables/useSettings'
@@ -23,6 +23,11 @@ import {
   type CloudStatus,
   type UpdateCheckResult,
 } from '@/api/cloud'
+import {
+  listAiProviders,
+  matchProvider,
+  type AIProviderPreset,
+} from '@/api/aiProviders'
 import { Switch } from '@/components/ui/switch'
 import NotificationSettingsPanel from '@/components/settings/NotificationSettingsPanel.vue'
 import RotationSettingsPanel from '@/components/settings/RotationSettingsPanel.vue'
@@ -54,6 +59,49 @@ const cloudStatus = ref<CloudStatus | null>(null)
 const licenseKeyInput = ref('')
 const isCloudBusy = ref(false)
 const updateResult = ref<UpdateCheckResult | null>(null)
+
+// ---- AI 供应商预设 ----
+const aiProviders = ref<AIProviderPreset[]>([])
+const selectedProviderId = ref<string>('zhipu')
+const showAiGuide = ref(true)
+
+const selectedProvider = computed(() =>
+  aiProviders.value.find((p) => p.id === selectedProviderId.value),
+)
+const selectedModelPreset = computed(() =>
+  selectedProvider.value?.models.find((m) => m.name === aiSettings.value.OPENAI_MODEL_NAME),
+)
+
+async function loadAiProviders() {
+  try {
+    aiProviders.value = await listAiProviders()
+    // 依据已保存的 base_url 回显供应商
+    if (aiProviders.value.length) {
+      const matched = matchProvider(aiProviders.value, aiSettings.value.OPENAI_BASE_URL || '')
+      if (matched) selectedProviderId.value = matched.id
+    }
+  } catch (e) {
+    console.error('load ai providers failed', e)
+    aiProviders.value = []
+  }
+}
+
+function onProviderChange(providerId: string) {
+  selectedProviderId.value = providerId
+  const provider = aiProviders.value.find((p) => p.id === providerId)
+  if (!provider) return
+  if (provider.id !== 'custom') {
+    aiSettings.value.OPENAI_BASE_URL = provider.base_url
+    // 默认选第一个支持看图的模型；没有则选第一个
+    const preferred = provider.models.find((m) => m.vision) || provider.models[0]
+    if (preferred) aiSettings.value.OPENAI_MODEL_NAME = preferred.name
+    aiSettings.value.OPENAI_TEXT_MODEL_NAME = provider.recommended_text_model || ''
+  }
+}
+
+watch(isReady, (ready) => {
+  if (ready && !aiProviders.value.length) loadAiProviders()
+}, { immediate: true })
 
 async function refreshCloudStatus() {
   try {
@@ -299,12 +347,45 @@ watch(selectedPrompt, async (value) => {
             <CardDescription>{{ t('settings.ai.description') }}</CardDescription>
           </CardHeader>
           <CardContent v-if="isReady" class="space-y-4">
-            <div class="grid gap-2">
-              <Label>API Base URL</Label>
-              <Input v-model="aiSettings.OPENAI_BASE_URL" placeholder="https://api.openai.com/v1" />
+            <!-- 快速入门 -->
+            <div v-if="showAiGuide" class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="font-medium text-blue-800">{{ t('settings.ai.guide.title') }}</span>
+                <button class="text-xs text-gray-500 hover:text-gray-700" @click="showAiGuide = false">✕</button>
+              </div>
+              <ol class="list-decimal list-inside text-blue-900/80 space-y-0.5">
+                <li>{{ t('settings.ai.guide.step1') }}</li>
+                <li>{{ t('settings.ai.guide.step2') }}</li>
+                <li>{{ t('settings.ai.guide.step3') }}</li>
+                <li>{{ t('settings.ai.guide.step4') }}</li>
+              </ol>
             </div>
+
+            <!-- 供应商 -->
             <div class="grid gap-2">
-              <Label>API Key</Label>
+              <Label>{{ t('settings.ai.provider') }}</Label>
+              <Select :model-value="selectedProviderId" @update:model-value="(v) => onProviderChange(v as string)">
+                <SelectTrigger><SelectValue :placeholder="t('settings.ai.providerPlaceholder')" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="p in aiProviders" :key="p.id" :value="p.id">
+                    {{ p.display_name }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p v-if="selectedProvider?.note" class="text-xs text-gray-500">{{ selectedProvider.note }}</p>
+            </div>
+
+            <!-- API Key -->
+            <div class="grid gap-2">
+              <div class="flex items-center justify-between">
+                <Label>API Key</Label>
+                <a
+                  v-if="selectedProvider?.key_url"
+                  :href="selectedProvider.key_url"
+                  target="_blank"
+                  class="text-xs text-blue-600 underline"
+                >{{ t('settings.ai.getApiKey') }} →</a>
+              </div>
               <Input
                 v-model="aiSettings.OPENAI_API_KEY"
                 type="password"
@@ -314,10 +395,63 @@ watch(selectedPrompt, async (value) => {
                 {{ systemStatus?.env_file.openai_api_key_set ? t('settings.ai.keyConfigured') : t('settings.ai.keyMissing') }}
               </p>
             </div>
-            <div class="grid gap-2">
+
+            <!-- 模型：内置供应商下拉（免费角标/Vision），自定义手填 -->
+            <div v-if="selectedProvider?.models.length" class="grid gap-2">
               <Label>{{ t('settings.ai.modelName') }}</Label>
-              <Input v-model="aiSettings.OPENAI_MODEL_NAME" placeholder="gpt-3.5-turbo" />
+              <Select v-model="aiSettings.OPENAI_MODEL_NAME">
+                <SelectTrigger><SelectValue :placeholder="t('settings.ai.modelPlaceholder')" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem v-for="m in selectedProvider.models" :key="m.name" :value="m.name">
+                    <span class="inline-flex items-center gap-1.5">
+                      <span
+                        v-if="m.badge === 'free'"
+                        class="text-[10px] font-bold bg-green-100 text-green-700 px-1 py-px rounded"
+                      >FREE</span>
+                      <span
+                        v-else-if="m.badge === 'free_quota'"
+                        class="text-[10px] font-bold bg-amber-100 text-amber-700 px-1 py-px rounded"
+                      >{{ t('settings.ai.freeQuota') }}</span>
+                      <span>{{ m.name }}</span>
+                      <span v-if="m.vision" :title="t('settings.ai.visionCapable')">👁</span>
+                      <span v-if="m.note" class="text-xs text-gray-400">{{ m.note }}</span>
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p v-if="selectedModelPreset && !selectedModelPreset.vision" class="text-xs text-amber-600">
+                {{ t('settings.ai.noVisionWarning') }}
+              </p>
             </div>
+            <div v-else class="grid gap-2">
+              <Label>{{ t('settings.ai.modelName') }}</Label>
+              <Input v-model="aiSettings.OPENAI_MODEL_NAME" placeholder="e.g. gpt-4o / qwen-vl-plus" />
+            </div>
+
+            <!-- 长文本模型（可选） -->
+            <div class="grid gap-2">
+              <Label>{{ t('settings.ai.textModel') }}</Label>
+              <Select
+                :model-value="aiSettings.OPENAI_TEXT_MODEL_NAME || '__none__'"
+                @update:model-value="(v) => (aiSettings.OPENAI_TEXT_MODEL_NAME = v === '__none__' ? '' : (v as string))"
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">{{ t('settings.ai.textModelNone') }}</SelectItem>
+                  <SelectItem v-for="m in selectedProvider?.models || []" :key="m.name" :value="m.name">
+                    {{ m.name }}<span v-if="!m.vision" class="text-xs text-gray-400">（text）</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p class="text-xs text-gray-500">{{ t('settings.ai.textModelHint') }}</p>
+            </div>
+
+            <!-- Base URL（内置自动填充；自定义必填） -->
+            <div class="grid gap-2">
+              <Label>API Base URL</Label>
+              <Input v-model="aiSettings.OPENAI_BASE_URL" placeholder="https://api.openai.com/v1" />
+            </div>
+
             <div class="grid gap-2">
               <Label>{{ t('settings.ai.proxy') }}</Label>
               <Input v-model="aiSettings.PROXY_URL" placeholder="http://127.0.0.1:7890" />

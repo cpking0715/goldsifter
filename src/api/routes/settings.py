@@ -104,6 +104,7 @@ class AISettingsModel(BaseModel):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_BASE_URL: Optional[str] = None
     OPENAI_MODEL_NAME: Optional[str] = None
+    OPENAI_TEXT_MODEL_NAME: Optional[str] = None
     SKIP_AI_ANALYSIS: Optional[bool] = None
     PROXY_URL: Optional[str] = None
 
@@ -259,6 +260,7 @@ async def get_ai_settings():
     return {
         "OPENAI_BASE_URL": env_manager.get_value("OPENAI_BASE_URL", ""),
         "OPENAI_MODEL_NAME": env_manager.get_value("OPENAI_MODEL_NAME", ""),
+        "OPENAI_TEXT_MODEL_NAME": env_manager.get_value("OPENAI_TEXT_MODEL_NAME", ""),
         "SKIP_AI_ANALYSIS": env_manager.get_value("SKIP_AI_ANALYSIS", "false").lower() == "true",
         "PROXY_URL": env_manager.get_value("PROXY_URL", ""),
     }
@@ -273,6 +275,9 @@ async def update_ai_settings(settings: AISettingsModel):
         updates["OPENAI_BASE_URL"] = settings.OPENAI_BASE_URL
     if settings.OPENAI_MODEL_NAME is not None:
         updates["OPENAI_MODEL_NAME"] = settings.OPENAI_MODEL_NAME
+    if settings.OPENAI_TEXT_MODEL_NAME is not None:
+        # 允许显式清空（切换到无独立文本模型的供应商时）
+        updates["OPENAI_TEXT_MODEL_NAME"] = settings.OPENAI_TEXT_MODEL_NAME
     if settings.SKIP_AI_ANALYSIS is not None:
         updates["SKIP_AI_ANALYSIS"] = str(settings.SKIP_AI_ANALYSIS).lower()
     if settings.PROXY_URL is not None:
