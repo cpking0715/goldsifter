@@ -5,6 +5,7 @@ const zhCN = {
     name: '千淘',
   },
   platforms: {
+    youpin: '悠悠有品（游戏饰品）',
     ebay: 'eBay（海外捡漏）',
     xianyu: '闲鱼',
     kongfz: '孔夫子旧书网',

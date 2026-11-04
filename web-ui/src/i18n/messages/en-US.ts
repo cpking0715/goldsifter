@@ -5,6 +5,7 @@ const enUS = {
     name: 'Qiantao',
   },
   platforms: {
+    youpin: 'YouPin898 (game skins)',
     ebay: 'eBay (overseas)',
     xianyu: 'Xianyu',
     kongfz: 'Kongfz',

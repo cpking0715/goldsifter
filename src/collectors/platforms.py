@@ -11,6 +11,7 @@ from dataclasses import dataclass
 PLATFORM_XIANYU = "xianyu"
 PLATFORM_KONGFZ = "kongfz"
 PLATFORM_EBAY = "ebay"
+PLATFORM_YOUPIN = "youpin"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,13 @@ _PLATFORMS: dict[str, PlatformInfo] = {
     PLATFORM_EBAY: PlatformInfo(
         platform_id=PLATFORM_EBAY,
         display_name="eBay（海外·Pro）",
+        capabilities=PlatformCapabilities(
+            price_range=True,
+        ),
+    ),
+    PLATFORM_YOUPIN: PlatformInfo(
+        platform_id=PLATFORM_YOUPIN,
+        display_name="悠悠有品（游戏饰品·Pro）",
         capabilities=PlatformCapabilities(
             price_range=True,
         ),
