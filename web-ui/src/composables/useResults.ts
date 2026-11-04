@@ -385,12 +385,24 @@ export function useResults() {
     item._is_favorite = next // 乐观更新，失败回滚
     try {
       await resultsApi.updateItemFavorite(file, itemId, next)
-      counts.value = await resultsApi.getResultCounts(file)
     } catch (e) {
       item._is_favorite = previous
       if (e instanceof Error) error.value = e
+      return
     } finally {
       favoritePending.delete(itemId)
+    }
+    // 收藏成功后的轻量收尾：计数刷新失败不回滚星标（服务端已生效）
+    try {
+      const newCounts = await resultsApi.getResultCounts(file)
+      if (selectedFile.value === file) counts.value = newCounts
+    } catch { /* counts 留旧值，下次刷新自然对齐 */ }
+    // 在「收藏」分类下取消收藏：本地移除该卡片，保持视图与过滤语义一致
+    if (!next && filters.category === 'favorite') {
+      results.value = results.value.filter(
+        (candidate) => candidate.商品信息?.商品ID !== itemId
+      )
+      totalItems.value = Math.max(0, totalItems.value - 1)
     }
   }
 

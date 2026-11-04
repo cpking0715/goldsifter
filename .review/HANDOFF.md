@@ -161,3 +161,13 @@ Cursor 审阅（2026-11-04，对 671bb80）：
 修复验证：`pytest tests/integration/test_api_results.py` → **11 passed**；`npm run build` → 退出码 0。
 findings #1/#3 为前端逻辑（无前端测试基建），以 vue-tsc 类型检查 + 构建 + 代码走读验证。
 
+第二轮复审（2026-11-04，对 74f067c）：台账 4 条确认完整落地，另出 3 条收藏成功路径残留：
+
+| # | 来源 | 严重度 | 问题 | 状态 |
+|---|------|--------|------|------|
+| R2-1 | Cursor major | counts 刷新失败会误回滚已成功的收藏；快切文件可能把旧 counts 盖到新文件 | **fixed**：updateItemFavorite 与 counts 刷新分离，仅前者失败才回滚；counts 赋值前校验 selectedFile 未变 |
+| R2-2 | Cursor major | 「收藏」Tab 下取消收藏后卡片残留 | **fixed**：取消收藏且当前分类为 favorite 时本地移除卡片并 total-1（避免整页刷新丢已加载分页） |
+| R2-3 | Cursor minor | export 400 时前端只见 HTTP error，看不到后端 detail | **fixed**：downloadResultExport 解析响应 detail 透出（如「最低价不能高于最高价」） |
+
+修复验证：`python -m pytest -q` → **179 passed, 6 failed（上游既有）**；`npm run build` → 退出码 0。
+

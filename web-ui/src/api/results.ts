@@ -82,7 +82,13 @@ export async function downloadResultExport(filename: string, params: GetResultCo
     throw new Error('Unauthorized')
   }
   if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
+    // 优先透出后端 detail（如「最低价不能高于最高价」）
+    let detail = ''
+    try {
+      const payload = await response.json()
+      detail = typeof payload?.detail === 'string' ? payload.detail : ''
+    } catch { /* body 非 JSON 时忽略 */ }
+    throw new Error(detail || `HTTP error! status: ${response.status}`)
   }
   const blob = await response.blob()
   const objectUrl = URL.createObjectURL(blob)
