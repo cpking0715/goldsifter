@@ -197,23 +197,30 @@ export function useResults() {
     }
   }
 
+  let fetchSeqCounter = 0
+
   async function fetchPage(targetPage: number, append: boolean) {
-    if (!selectedFile.value) {
+    const file = selectedFile.value
+    if (!file) {
       results.value = []
       totalItems.value = 0
       counts.value = null
       return
     }
 
+    // 请求序号 + 文件守卫：快切结果文件时丢弃过期的在途响应，
+    // 避免旧响应覆盖新文件列表/counts，以及误推进另一文件的新品水位
+    const seq = ++fetchSeqCounter
     if (append) isLoadingMore.value = true
     else isLoading.value = true
     error.value = null
     try {
-      const data = await resultsApi.getResultContent(selectedFile.value, {
+      const data = await resultsApi.getResultContent(file, {
         ...buildRequestParams(),
         page: targetPage,
         limit: limit.value,
       })
+      if (seq !== fetchSeqCounter || selectedFile.value !== file) return
       if (append) results.value.push(...data.items)
       else results.value = data.items
       totalItems.value = data.total_items
@@ -221,6 +228,7 @@ export function useResults() {
       page.value = targetPage
       advanceNewSince(data.items)
     } catch (e) {
+      if (seq !== fetchSeqCounter || selectedFile.value !== file) return
       if (e instanceof Error) error.value = e
       if (!append) {
         results.value = []
@@ -377,32 +385,34 @@ export function useResults() {
     const file = selectedFile.value
     const itemId = item.商品信息?.商品ID
     if (!file || !itemId) return
-    // 同一商品的收藏请求串行化：在途时忽略后续点击，避免响应乱序
+    // 同一商品的收藏操作全程序串行化（PATCH + counts 收尾），避免乱序覆盖
     if (favoritePending.has(itemId)) return
     favoritePending.add(itemId)
-    const next = item._is_favorite !== true
-    const previous = item._is_favorite === true
-    item._is_favorite = next // 乐观更新，失败回滚
     try {
-      await resultsApi.updateItemFavorite(file, itemId, next)
-    } catch (e) {
-      item._is_favorite = previous
-      if (e instanceof Error) error.value = e
-      return
+      const next = item._is_favorite !== true
+      const previous = item._is_favorite === true
+      item._is_favorite = next // 乐观更新，失败回滚
+      try {
+        await resultsApi.updateItemFavorite(file, itemId, next)
+      } catch (e) {
+        item._is_favorite = previous
+        if (e instanceof Error) error.value = e
+        return
+      }
+      // 收藏成功后的轻量收尾：计数刷新失败不回滚星标（服务端已生效）
+      try {
+        const newCounts = await resultsApi.getResultCounts(file)
+        if (selectedFile.value === file) counts.value = newCounts
+      } catch { /* counts 留旧值，下次刷新自然对齐 */ }
+      // 在「收藏」分类下取消收藏：本地移除该卡片，保持视图与过滤语义一致
+      if (!next && filters.category === 'favorite' && selectedFile.value === file) {
+        results.value = results.value.filter(
+          (candidate) => candidate.商品信息?.商品ID !== itemId
+        )
+        totalItems.value = Math.max(0, totalItems.value - 1)
+      }
     } finally {
       favoritePending.delete(itemId)
-    }
-    // 收藏成功后的轻量收尾：计数刷新失败不回滚星标（服务端已生效）
-    try {
-      const newCounts = await resultsApi.getResultCounts(file)
-      if (selectedFile.value === file) counts.value = newCounts
-    } catch { /* counts 留旧值，下次刷新自然对齐 */ }
-    // 在「收藏」分类下取消收藏：本地移除该卡片，保持视图与过滤语义一致
-    if (!next && filters.category === 'favorite') {
-      results.value = results.value.filter(
-        (candidate) => candidate.商品信息?.商品ID !== itemId
-      )
-      totalItems.value = Math.max(0, totalItems.value - 1)
     }
   }
 

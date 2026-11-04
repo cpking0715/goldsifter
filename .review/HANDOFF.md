@@ -171,3 +171,14 @@ findings #1/#3 为前端逻辑（无前端测试基建），以 vue-tsc 类型�
 
 修复验证：`python -m pytest -q` → **179 passed, 6 failed（上游既有）**；`npm run build` → 退出码 0。
 
+第三轮复审（2026-11-04，对 9997aeb）：R2 三条确认落地（R2-2 守卫不完整），另出 4 条：
+
+| # | 来源 | 严重度 | 问题 | 状态 |
+|---|------|--------|------|------|
+| R3-1 | Cursor major | favorite Tab 本地移除缺 selectedFile 守卫，快切文件可能误删新文件列表项 | **fixed**：移除动作加 `selectedFile === file` 守卫 |
+| R3-2 | Cursor major | fetchPage 无过期响应守卫，快切文件时旧响应覆盖 results/counts 且误推进另一文件水位 | **fixed**：请求序号 + 文件双重守卫，过期响应整体丢弃（含 advanceNewSince） |
+| R3-3 | Cursor major | `.tmp-ls-git/`（Cursor 审阅进程自建的 ls 包装器与全量 diff）被 git_commit 卷入产品树 | **fixed**：git rm 移除；教训=git_commit 前必须核对未跟踪清单（记忆在档的工具行为） |
+| R3-4 | Cursor minor | favoritePending 在 PATCH 后即释放，counts 收尾未串行，旧 counts 可能盖新 | **fixed**：锁覆盖 PATCH+counts 全程 |
+
+修复验证：`npm run build` → 退出码 0（本轮全部为前端改动，pytest 无涉；后端未动）。
+
