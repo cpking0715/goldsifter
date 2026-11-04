@@ -1,13 +1,23 @@
-import type { ResultInsights, ResultItem } from '@/types/result.d.ts'
+import type { ResultCategoryCounts, ResultInsights, ResultItem } from '@/types/result.d.ts'
 import { getAuthToken, useAuth } from '@/composables/useAuth'
 import { http } from '@/lib/http'
 
+export type ResultCategory =
+  | 'all'
+  | 'ai_recommended'
+  | 'high_value'
+  | 'keyword_hit'
+  | 'favorite'
+  | 'hidden'
+
 export interface GetResultContentParams {
-  recommended_only?: boolean;
-  ai_recommended_only?: boolean;
-  keyword_recommended_only?: boolean;
+  category?: ResultCategory;
+  search?: string;
+  min_price?: number | null;
+  max_price?: number | null;
+  found_since?: string | null;
   include_hidden?: boolean;
-  sort_by?: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count';
+  sort_by?: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count' | 'value_score';
   sort_order?: 'asc' | 'desc';
   page?: number;
   limit?: number;
@@ -25,8 +35,13 @@ export async function deleteResultFile(filename: string): Promise<{ message: str
 export async function getResultContent(
   filename: string,
   params: GetResultContentParams = {}
-): Promise<{ total_items: number; items: ResultItem[] }> {
+): Promise<{ total_items: number; items: ResultItem[]; counts?: ResultCategoryCounts }> {
   return await http(`/api/results/${filename}`, { params: params as Record<string, any> })
+}
+
+export async function getResultCounts(filename: string): Promise<ResultCategoryCounts> {
+  const data = await http(`/api/results/${filename}/counts`)
+  return data.counts
 }
 
 export async function getResultInsights(filename: string): Promise<ResultInsights> {
@@ -85,5 +100,13 @@ export async function updateItemStatus(filename: string, itemId: string, status:
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
+  })
+}
+
+export async function updateItemFavorite(filename: string, itemId: string, favorite: boolean): Promise<{ message: string; favorite: boolean }> {
+  return await http(`/api/results/${filename}/items/${itemId}/favorite`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ favorite }),
   })
 }

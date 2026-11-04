@@ -35,6 +35,7 @@ from src.services.task_log_cleanup_service import cleanup_task_logs
 from src.services.task_generation_service import TaskGenerationService
 from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
 from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
+from src.infrastructure.persistence.storage_names import build_result_filename
 from src.infrastructure.config.settings import settings as app_settings
 
 
@@ -54,6 +55,15 @@ async def _sync_task_runtime_status(task_id: int, is_running: bool) -> None:
         "task_status_changed",
         {"id": task_id, "is_running": is_running},
     )
+    # 任务进程结束后结果集可能已更新，通知前端刷新结果页
+    if not is_running:
+        await websocket.broadcast_message(
+            "results_updated",
+            {
+                "task_id": task_id,
+                "filename": build_result_filename(task.keyword, task.platform),
+            },
+        )
 
 
 process_service.set_lifecycle_hooks(

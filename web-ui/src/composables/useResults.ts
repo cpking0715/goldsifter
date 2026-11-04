@@ -1,12 +1,46 @@
 import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { ResultInsights, ResultItem } from '@/types/result.d.ts'
+import type { ResultCategoryCounts, ResultInsights, ResultItem } from '@/types/result.d.ts'
 import * as resultsApi from '@/api/results'
-import type { GetResultContentParams } from '@/api/results'
+import type { GetResultContentParams, ResultCategory } from '@/api/results'
 import { useWebSocket } from '@/composables/useWebSocket'
 import * as tasksApi from '@/api/tasks'
 import { parseResultFilename, platformLabel } from '@/lib/platform'
+
+/** 发现时间范围：0=全部，'last_visit'=自上次查看，其余为天数 */
+export type FoundWithin = 0 | 1 | 3 | 7 | 30 | 'last_visit'
+
+interface ResultsFilters {
+  category: ResultCategory
+  search: string
+  minPrice: string
+  maxPrice: string
+  foundWithin: FoundWithin
+  sort_by: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count' | 'value_score'
+  sort_order: 'asc' | 'desc'
+}
+
+const FILTER_PERSIST_KEYS: (keyof ResultsFilters)[] = [
+  'category',
+  'search',
+  'minPrice',
+  'maxPrice',
+  'foundWithin',
+  'sort_by',
+  'sort_order',
+]
+
+const FETCH_DEBOUNCE_MS = 300
+
+function toLocalIso(date: Date): string {
+  const pad = (value: number, length = 2) => String(value).padStart(length, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+    `.${pad(date.getMilliseconds(), 3)}`
+  )
+}
 
 export function useResults() {
   const { t } = useI18n()
@@ -16,6 +50,7 @@ export function useResults() {
   const selectedFile = ref<string | null>(null)
   const results = ref<ResultItem[]>([])
   const insights = ref<ResultInsights | null>(null)
+  const counts = ref<ResultCategoryCounts | null>(null)
   const totalItems = ref(0)
   const page = ref(1)
   const limit = ref(100)
@@ -25,28 +60,44 @@ export function useResults() {
   const hasFetchedFiles = ref(false)
   const hasFetchedTasks = ref(false)
   const isSavingBlacklist = ref(false)
+  const isLoadingMore = ref(false)
+  // 「新商品」判定：watermark=上次查看到的最新爬取时间，prevVisit=当前角标基线
+  const newSinceWatermark = ref<string | null>(null)
+  const prevVisit = ref<string | null>(null)
   const readyDelayMs = 200
   let readyTimer: ReturnType<typeof setTimeout> | null = null
-  
+  let fetchDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
   const STORAGE_KEY_FILTERS = 'resultFilters'
 
-  function loadPersistedFilters(): Required<Omit<GetResultContentParams, 'page' | 'limit'>> {
-    const defaults: Required<Omit<GetResultContentParams, 'page' | 'limit'>> = {
-      recommended_only: false,
-      ai_recommended_only: false,
-      keyword_recommended_only: false,
-      include_hidden: false,
+  function loadPersistedFilters(): ResultsFilters {
+    const defaults: ResultsFilters = {
+      category: 'all',
+      search: '',
+      minPrice: '',
+      maxPrice: '',
+      foundWithin: 0,
       sort_by: 'crawl_time',
       sort_order: 'desc',
     }
     try {
       const saved = localStorage.getItem(STORAGE_KEY_FILTERS)
-      if (saved) return { ...defaults, ...JSON.parse(saved) }
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<ResultsFilters>
+        const sanitized: ResultsFilters = { ...defaults }
+        const target = sanitized as unknown as Record<string, unknown>
+        for (const key of FILTER_PERSIST_KEYS) {
+          if (parsed[key] !== undefined) {
+            target[key] = parsed[key]
+          }
+        }
+        return sanitized
+      }
     } catch { /* ignore */ }
     return defaults
   }
 
-  const filters = reactive<Required<Omit<GetResultContentParams, 'page' | 'limit'>>>(loadPersistedFilters())
+  const filters = reactive<ResultsFilters>(loadPersistedFilters())
 
   const isLoading = ref(false)
   const error = ref<Error | null>(null)
@@ -59,6 +110,66 @@ export function useResults() {
   function resultFileKey(filename: string) {
     const parsed = parseResultFilename(filename)
     return `${parsed.platform}:${normalizeKeyword(parsed.keyword)}`
+  }
+
+  function newSinceStorageKey(filename: string) {
+    return `resultNewSince:${filename}`
+  }
+
+  function loadNewSinceState() {
+    const file = selectedFile.value
+    const stored = file ? localStorage.getItem(newSinceStorageKey(file)) : null
+    newSinceWatermark.value = stored
+    prevVisit.value = stored
+  }
+
+  /** 请求前把 UI 筛选翻译成 API 参数（不含分页）。 */
+  function buildRequestParams(): GetResultContentParams {
+    const params: GetResultContentParams = {
+      category: filters.category,
+      sort_by: filters.sort_by,
+      sort_order: filters.sort_order,
+    }
+    const search = filters.search.trim()
+    if (search) params.search = search
+    if (filters.minPrice !== '') {
+      const min = Number(filters.minPrice)
+      if (!Number.isNaN(min)) params.min_price = min
+    }
+    if (filters.maxPrice !== '') {
+      const max = Number(filters.maxPrice)
+      if (!Number.isNaN(max)) params.max_price = max
+    }
+    if (filters.foundWithin === 'last_visit') {
+      // watermark 即「上次查看」时见到的最新时间
+      if (newSinceWatermark.value) params.found_since = newSinceWatermark.value
+    } else if (filters.foundWithin > 0) {
+      params.found_since = toLocalIso(new Date(Date.now() - filters.foundWithin * 86400000))
+    }
+    return params
+  }
+
+  /** 出现更新的记录时前移水位，并把角标基线定在旧水位。 */
+  function advanceNewSince(items: ResultItem[]) {
+    const file = selectedFile.value
+    if (!file) return
+    const newest = items
+      .map((item) => item.爬取时间)
+      .filter(Boolean)
+      .sort()
+      .pop()
+    if (!newest) return
+    const stored = localStorage.getItem(newSinceStorageKey(file))
+    if (!stored) {
+      // 首次访问：全部视为已见，不标新
+      localStorage.setItem(newSinceStorageKey(file), newest)
+      newSinceWatermark.value = newest
+      prevVisit.value = newest
+    } else if (newest > stored) {
+      prevVisit.value = stored
+      localStorage.setItem(newSinceStorageKey(file), newest)
+      newSinceWatermark.value = newest
+    }
   }
 
   // Methods
@@ -87,30 +198,50 @@ export function useResults() {
     }
   }
 
-  async function fetchResults() {
+  async function fetchPage(targetPage: number, append: boolean) {
     if (!selectedFile.value) {
       results.value = []
       totalItems.value = 0
+      counts.value = null
       return
     }
 
-    isLoading.value = true
+    if (append) isLoadingMore.value = true
+    else isLoading.value = true
     error.value = null
     try {
       const data = await resultsApi.getResultContent(selectedFile.value, {
-        ...filters,
-        page: page.value,
+        ...buildRequestParams(),
+        page: targetPage,
         limit: limit.value,
       })
-      results.value = data.items
+      if (append) results.value.push(...data.items)
+      else results.value = data.items
       totalItems.value = data.total_items
+      if (data.counts) counts.value = data.counts
+      page.value = targetPage
+      advanceNewSince(data.items)
     } catch (e) {
       if (e instanceof Error) error.value = e
-      results.value = []
-      totalItems.value = 0
+      if (!append) {
+        results.value = []
+        totalItems.value = 0
+      }
     } finally {
       isLoading.value = false
+      isLoadingMore.value = false
     }
+  }
+
+  function fetchResults() {
+    return fetchPage(1, false)
+  }
+
+  const canLoadMore = computed(() => results.value.length < totalItems.value)
+
+  async function loadMore() {
+    if (!selectedFile.value || isLoading.value || isLoadingMore.value || !canLoadMore.value) return
+    await fetchPage(page.value + 1, true)
   }
 
   async function fetchInsights() {
@@ -199,7 +330,7 @@ export function useResults() {
   async function exportSelectedResults() {
     if (!selectedFile.value) return
     try {
-      await resultsApi.downloadResultExport(selectedFile.value, { ...filters })
+      await resultsApi.downloadResultExport(selectedFile.value, buildRequestParams())
     } catch (e) {
       if (e instanceof Error) error.value = e
     }
@@ -217,6 +348,7 @@ export function useResults() {
         if (lastSelected === target) {
           localStorage.removeItem('lastSelectedResultFile')
         }
+        localStorage.removeItem(newSinceStorageKey(target))
       }
       await fetchFiles()
     } catch (e) {
@@ -240,6 +372,22 @@ export function useResults() {
     }
   }
 
+  async function toggleItemFavorite(item: ResultItem) {
+    const file = selectedFile.value
+    const itemId = item.商品信息?.商品ID
+    if (!file || !itemId) return
+    const next = item._is_favorite !== true
+    const previous = item._is_favorite === true
+    item._is_favorite = next // 乐观更新，失败回滚
+    try {
+      await resultsApi.updateItemFavorite(file, itemId, next)
+      counts.value = await resultsApi.getResultCounts(file)
+    } catch (e) {
+      item._is_favorite = previous
+      if (e instanceof Error) error.value = e
+    }
+  }
+
   async function saveBlacklistRules(keywords: string[]) {
     if (!selectedFile.value) return
     isSavingBlacklist.value = true
@@ -258,11 +406,27 @@ export function useResults() {
   }
 
   // Watchers
-  watch(filters, (val) => {
-    localStorage.setItem(STORAGE_KEY_FILTERS, JSON.stringify(val))
+  watch(
+    filters,
+    (val) => {
+      const persisted: Record<string, unknown> = {}
+      for (const key of FILTER_PERSIST_KEYS) {
+        persisted[key] = val[key]
+      }
+      localStorage.setItem(STORAGE_KEY_FILTERS, JSON.stringify(persisted))
+    },
+    { deep: true }
+  )
+  watch([selectedFile, filters], () => {
+    // 输入防抖：搜索/价格等快速变化时不立刻打请求
+    if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
+    fetchDebounceTimer = setTimeout(() => {
+      fetchDebounceTimer = null
+      fetchPage(1, false)
+    }, FETCH_DEBOUNCE_MS)
   }, { deep: true })
-  watch([selectedFile, filters], fetchResults, { deep: true })
   watch(selectedFile, () => {
+    loadNewSinceState()
     fetchInsights()
     fetchBlacklistRules()
   })
@@ -300,6 +464,7 @@ export function useResults() {
   onMounted(() => {
     fetchFiles()
     fetchTaskNameMap()
+    loadNewSinceState()
   })
 
   return {
@@ -307,15 +472,23 @@ export function useResults() {
     selectedFile,
     results,
     insights,
+    counts,
     totalItems,
+    page,
     filters,
     isLoading,
+    isLoadingMore,
+    canLoadMore,
     error,
+    newSince: computed(() => prevVisit.value),
     fetchFiles, // Expose to allow manual refresh
+    fetchResults,
+    loadMore,
     refreshResults,
     exportSelectedResults,
     deleteSelectedFile,
     toggleItemBlock,
+    toggleItemFavorite,
     blacklistKeywords,
     isSavingBlacklist,
     saveBlacklistRules,

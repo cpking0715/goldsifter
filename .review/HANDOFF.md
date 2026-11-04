@@ -81,3 +81,73 @@ src/{scraper,ai_handler,prompt_utils}.py、spider_v2.py、server/app.py（新）
 
 修复验证：pytest 155 通过/6 上游既有失败；tx-51 部署后限流/健康实测；客户端严格 pin 正反验证；
 验收冒烟矩阵 12/12（孔夫子全链路/去重/insights/WS/闲鱼守卫/云闭环/license 重激活）。
+
+---
+
+# Handoff — 监控结果分类与过滤改造（分类 Tab / 搜索 / 价格区间 / 收藏 / 加载更多）
+
+## 任务
+
+闲鱼监控结果页原本是平铺卡片流：仅「仅AI推荐/仅关键词推荐/显示隐藏」三个勾选框，无搜索与价格/时间过滤，且前端写死 page=1 limit=100（超过 100 条的旧结果永远看不到）。要求做分类与过滤，让用户「先看重点、快速过滤、翻得完」。
+
+## 已实现
+
+- 分类 Tab（带数量角标）：全部 / AI 推荐 / 高性价比（value_score≥60）/ 关键词命中 / 收藏 / 已屏蔽，替代旧 3 勾选框
+- 标题/卖家搜索（前端 300ms 防抖）、价格区间、发现时间（24h/3d/7d/30d/自上次查看，基于 crawl_time 字典序比较）
+- 收藏：result_items 加 is_favorite 列（幂等迁移）+ PATCH favorite 端点 + 卡片★按钮（乐观更新）
+- 加载更多：修复只能看前 100 条的问题，「已显示 X / 共 Y 条」
+- 新商品：per-file localStorage 水位（上次查看的最新 crawl_time），卡片「新」角标 +「自上次查看」筛选项
+- 任务进程结束后广播 results_updated（激活前端已有但后端从未发送的死监听）
+- 卡片补渲染商品标签 chips（≤3 个）；CSV 导出同步支持全部新过滤参数
+- 后端过滤改为「SQL 全量加载+装饰 → Python 过滤/分类计数/性价比排序 → 内存分页」，列表响应附带 counts
+
+## Diff 基线
+
+base=e30528e  head=<本次提交（见 git log -1）>
+审阅范围命令：git diff e30528e...HEAD
+
+## 改动文件
+
+后端：
+- src/infrastructure/persistence/sqlite_connection.py（is_favorite 列迁移+索引）
+- src/services/result_storage_service.py（核心：装饰/过滤/计数/排序/收藏，query_result_records 返回三元组）
+- src/api/routes/results.py（新参数 category/search/min_price/max_price/found_since；counts 响应；PATCH favorite；GET counts）
+- src/app.py（任务停止时广播 results_updated）
+
+前端：
+- web-ui/src/composables/useResults.ts（重写：filters 新结构/防抖/加载更多/水位/收藏）
+- web-ui/src/components/results/ResultsFilterBar.vue（重写：分类 Tab 行+过滤行）
+- web-ui/src/components/results/ResultCard.vue（★收藏、新角标、商品标签）
+- web-ui/src/components/results/ResultsGrid.vue（加载更多、事件透传）
+- web-ui/src/views/ResultsView.vue、api/results.ts、types/result.d.ts、i18n zh-CN/en-US
+
+测试：
+- tests/integration/test_api_results.py（新增 5 个用例）
+- tests/unit/test_tasks_platform.py（迁移幂等用例）
+
+## 测试
+
+- `python -m pytest -q` → **177 passed, 6 failed, 3 skipped**。6 个失败已在 HEAD 干净 worktree（e30528e）上验证为上游既有失败（failure_guard×2 / frontend_build_paths / ai_client×2 / test_save_to_jsonl），非本次回归。
+- `cd web-ui && npm run build`（vue-tsc -b && vite build）→ 退出码 0。
+- 浏览器冒烟（8100 端口 + 真实库临时副本）：Tab 计数 941/127/126/0/0/0 正确；AI 推荐 Tab 过滤正确；加载更多 100→127；收藏往返（★点亮+计数 0→1+收藏 Tab 过滤）；搜索「国行」941→674 全命中；价格 ≥6500 → 275 条且边界正确；屏蔽→已屏蔽 Tab→恢复全链路正常。
+
+## 已知假设与未验证项
+
+- found_since 用「本地 naive ISO 字符串字典序比较」：前端按同格式生成（toLocalIso），服务端不解析时区；前提是 crawl_time 全为 `datetime.now().isoformat()` 同源格式（当前代码如此）。
+- 「新」角标与「自上次查看」在冒烟中未实机触发（需任务跑出新数据）；逻辑为纯前端水位推导，未实测。
+- 高性价比阈值 60 为常量（HIGH_VALUE_SCORE_THRESHOLD），未配置化。
+- value_score 仅 AI 输出该扩展时存在；缺失时该 Tab 计数为 0（符合设计）。
+- 结果集按关键词划分（实测 941 条），全量加载+Python 过滤性能可接受；未对万级以上结果集压测。
+
+## Review 焦点
+
+1. `result_storage_service.py` 的 `_apply_record_filters`：category=hidden 与 include_hidden 旧参数的语义互斥是否符合预期（hidden 分类只显示被隐藏项）。
+2. 旧 API 兼容：ai_recommended_only/keyword_recommended_only/include_hidden 旧参数路径是否有行为漂移（既有测试已覆盖，但请复核 normalize 逻辑）。
+3. useResults.ts 水位推进（advanceNewSince）与「自上次查看」参数的时序：请求前快照 watermark、响应后推进，是否存在筛选组合下的边界问题。
+4. routes 里 `ResultCategory` 枚举与 service 层常量字符串的一致性（两处定义）。
+5. toggleItemFavorite 乐观更新失败回滚是否有竞态（连续快速点击）。
+
+## findings 台账（本轮）
+
+（审阅结果由 reviewer 回填）
+

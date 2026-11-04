@@ -21,10 +21,12 @@ from src.services.result_storage_service import (
     list_result_filenames,
     load_all_result_records,
     load_result_blacklist_keywords,
+    load_result_category_counts,
     load_visible_result_item_ids,
     query_result_records,
     result_file_exists,
     save_result_blacklist_keywords,
+    update_item_favorite,
     update_item_status,
 )
 
@@ -32,6 +34,30 @@ from src.services.result_storage_service import (
 router = APIRouter(prefix="/api/results", tags=["results"])
 
 DEFAULT_EXPORT_FILENAME = "export.csv"
+
+
+class ResultCategory(str, Enum):
+    ALL = "all"
+    AI_RECOMMENDED = "ai_recommended"
+    HIGH_VALUE = "high_value"
+    KEYWORD_HIT = "keyword_hit"
+    FAVORITE = "favorite"
+    HIDDEN = "hidden"
+
+
+def _normalize_category(
+    category: ResultCategory | None,
+    ai_recommended_only: bool,
+    keyword_recommended_only: bool,
+) -> ResultCategory | None:
+    """显式 category 优先；否则兼容旧的推荐筛选布尔参数。"""
+    if category is not None and category != ResultCategory.ALL:
+        return category
+    if ai_recommended_only:
+        return ResultCategory.AI_RECOMMENDED
+    if keyword_recommended_only:
+        return ResultCategory.KEYWORD_HIT
+    return category
 
 
 def _build_download_headers(export_name: str) -> dict[str, str]:
@@ -89,19 +115,30 @@ async def get_result_file_content(
     ai_recommended_only: bool = Query(False),
     keyword_recommended_only: bool = Query(False),
     include_hidden: bool = Query(False),
+    category: ResultCategory | None = Query(None),
+    search: str | None = Query(None, max_length=100),
+    min_price: float | None = Query(None, ge=0),
+    max_price: float | None = Query(None, ge=0),
+    found_since: str | None = Query(None, max_length=40),
     sort_by: str = Query("crawl_time"),
     sort_order: str = Query("desc"),
 ):
-    """读取指定的 .jsonl 文件内容，支持分页、筛选和排序"""
+    """读取指定的 .jsonl 文件内容，支持分页、分类、筛选和排序"""
     if ai_recommended_only and keyword_recommended_only:
         raise HTTPException(status_code=400, detail="AI推荐筛选与关键词推荐筛选不能同时开启。")
 
     if recommended_only and not ai_recommended_only and not keyword_recommended_only:
         ai_recommended_only = True
 
+    effective_category = _normalize_category(
+        category, ai_recommended_only, keyword_recommended_only
+    )
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status_code=400, detail="最低价不能高于最高价。")
+
     try:
         validate_result_filename(filename)
-        total_items, items = await query_result_records(
+        total_items, items, counts = await query_result_records(
             filename,
             ai_recommended_only=ai_recommended_only,
             keyword_recommended_only=keyword_recommended_only,
@@ -110,6 +147,11 @@ async def get_result_file_content(
             page=page,
             limit=limit,
             include_hidden=include_hidden,
+            search=search,
+            min_price=min_price,
+            max_price=max_price,
+            found_since=found_since,
+            category=effective_category.value if effective_category else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -123,8 +165,22 @@ async def get_result_file_content(
         "total_items": total_items,
         "page": page,
         "limit": limit,
-        "items": paginated_results
+        "items": paginated_results,
+        "counts": counts,
     }
+
+
+@router.get("/{filename}/counts")
+async def get_result_file_counts(filename: str):
+    """读取结果集各分类数量（用于收藏等局部刷新场景）"""
+    try:
+        validate_result_filename(filename)
+        counts = await load_result_category_counts(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"读取分类计数时出错: {exc}")
+    return {"counts": counts}
 
 
 @router.get("/{filename}/insights")
@@ -147,6 +203,11 @@ async def export_result_file_content(
     ai_recommended_only: bool = Query(False),
     keyword_recommended_only: bool = Query(False),
     include_hidden: bool = Query(False),
+    category: ResultCategory | None = Query(None),
+    search: str | None = Query(None, max_length=100),
+    min_price: float | None = Query(None, ge=0),
+    max_price: float | None = Query(None, ge=0),
+    found_since: str | None = Query(None, max_length=40),
     sort_by: str = Query("crawl_time"),
     sort_order: str = Query("desc"),
 ):
@@ -154,6 +215,10 @@ async def export_result_file_content(
         raise HTTPException(status_code=400, detail="AI推荐筛选与关键词推荐筛选不能同时开启。")
     if recommended_only and not ai_recommended_only and not keyword_recommended_only:
         ai_recommended_only = True
+
+    effective_category = _normalize_category(
+        category, ai_recommended_only, keyword_recommended_only
+    )
 
     try:
         validate_result_filename(filename)
@@ -164,6 +229,11 @@ async def export_result_file_content(
             sort_by=sort_by,
             sort_order=sort_order,
             include_hidden=include_hidden,
+            search=search,
+            min_price=min_price,
+            max_price=max_price,
+            found_since=found_since,
+            category=effective_category.value if effective_category else None,
         )
         csv_text = build_results_csv(
             enrich_records_with_price_insight(results, filename)
@@ -190,6 +260,10 @@ class UpdateStatusRequest(BaseModel):
     status: ItemStatus
 
 
+class UpdateFavoriteRequest(BaseModel):
+    favorite: bool
+
+
 class BlacklistRulesRequest(BaseModel):
     keywords: list[str]
 
@@ -205,6 +279,19 @@ async def patch_item_status(filename: str, item_id: str, body: UpdateStatusReque
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"message": "状态已更新", "status": body.status.value}
+
+
+@router.patch("/{filename}/items/{item_id}/favorite")
+async def patch_item_favorite(filename: str, item_id: str, body: UpdateFavoriteRequest):
+    """收藏/取消收藏指定商品"""
+    try:
+        validate_result_filename(filename)
+        updated = await update_item_favorite(filename, item_id, body.favorite)
+        if not updated:
+            raise HTTPException(status_code=404, detail="商品未找到")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"message": "收藏状态已更新", "favorite": body.favorite}
 
 
 @router.get("/{filename}/blacklist-rules")

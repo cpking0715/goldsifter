@@ -25,6 +25,24 @@ SORT_COLUMN_MAP = {
     "keyword_hit_count": "keyword_hit_count",
 }
 
+# 高性价比分类的 value_score 阈值（AI 输出的 0-100 性价比分）
+HIGH_VALUE_SCORE_THRESHOLD = 60.0
+
+CATEGORY_ALL = "all"
+CATEGORY_AI_RECOMMENDED = "ai_recommended"
+CATEGORY_HIGH_VALUE = "high_value"
+CATEGORY_KEYWORD_HIT = "keyword_hit"
+CATEGORY_FAVORITE = "favorite"
+CATEGORY_HIDDEN = "hidden"
+RESULT_CATEGORIES = (
+    CATEGORY_ALL,
+    CATEGORY_AI_RECOMMENDED,
+    CATEGORY_HIGH_VALUE,
+    CATEGORY_KEYWORD_HIT,
+    CATEGORY_FAVORITE,
+    CATEGORY_HIDDEN,
+)
+
 
 def _get_link_unique_key(link: str) -> str:
     return link.split("&", 1)[0]
@@ -40,30 +58,72 @@ def _fallback_unique_key(record: dict, item: dict) -> str:
     return f"hash:{digest}"
 
 
-def _parse_raw_record(raw_json: str, *, status: str | None = None) -> dict:
+def _parse_raw_record(
+    raw_json: str, *, status: str | None = None, is_favorite: bool = False
+) -> dict:
     record = json.loads(raw_json)
     if status is not None:
         record["_status"] = status
+    record["_is_favorite"] = is_favorite
     return record
 
 
-def _build_query_conditions(
-    *,
-    filename: str,
-    ai_recommended_only: bool,
-    keyword_recommended_only: bool,
-) -> tuple[str, list]:
-    conditions = ["result_filename = ?"]
-    params: list = [filename]
-    if ai_recommended_only:
-        conditions.append("is_recommended = 1")
-        conditions.append("analysis_source = ?")
-        params.append("ai")
-    if keyword_recommended_only:
-        conditions.append("is_recommended = 1")
-        conditions.append("analysis_source = ?")
-        params.append("keyword")
-    return " AND ".join(conditions), params
+def _record_value_score(record: dict) -> float | None:
+    analysis = record.get("ai_analysis") or {}
+    try:
+        return float(analysis.get("value_score"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_ai_recommended_record(record: dict) -> bool:
+    analysis = record.get("ai_analysis") or {}
+    return (
+        analysis.get("analysis_source") == "ai"
+        and analysis.get("is_recommended") is True
+    )
+
+
+def _is_keyword_hit_record(record: dict) -> bool:
+    analysis = record.get("ai_analysis") or {}
+    return (
+        analysis.get("analysis_source") == "keyword"
+        and analysis.get("is_recommended") is True
+    )
+
+
+def _is_high_value_record(record: dict) -> bool:
+    score = _record_value_score(record)
+    return score is not None and score >= HIGH_VALUE_SCORE_THRESHOLD
+
+
+def _record_matches_category(record: dict, category: str) -> bool:
+    if category == CATEGORY_AI_RECOMMENDED:
+        return _is_ai_recommended_record(record)
+    if category == CATEGORY_HIGH_VALUE:
+        return _is_high_value_record(record)
+    if category == CATEGORY_KEYWORD_HIT:
+        return _is_keyword_hit_record(record)
+    if category == CATEGORY_FAVORITE:
+        return record.get("_is_favorite") is True
+    if category == CATEGORY_HIDDEN:
+        return not _is_record_visible(record)
+    return True
+
+
+def _record_search_text(record: dict) -> str:
+    item = record.get("商品信息", {}) or {}
+    seller = record.get("卖家信息", {}) or {}
+    parts = [
+        str(item.get("商品标题") or ""),
+        str(seller.get("卖家昵称") or item.get("卖家昵称") or ""),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _record_price(record: dict) -> float | None:
+    item = record.get("商品信息", {}) or {}
+    return parse_price_value(item.get("当前售价"))
 
 
 def _sort_expression(sort_by: str, sort_order: str) -> str:
@@ -111,40 +171,139 @@ def _is_record_visible(record: dict) -> bool:
     return record.get("_effective_hidden") is not True
 
 
-def _load_filtered_records_from_conn(
+def _load_decorated_records_from_conn(
     conn,
     *,
     filename: str,
-    ai_recommended_only: bool,
-    keyword_recommended_only: bool,
-    sort_by: str,
-    sort_order: str,
-    include_hidden: bool,
+    sort_by: str = "crawl_time",
+    sort_order: str = "desc",
 ) -> list[dict]:
-    where_clause, params = _build_query_conditions(
-        filename=filename,
-        ai_recommended_only=ai_recommended_only,
-        keyword_recommended_only=keyword_recommended_only,
-    )
+    """加载结果集全部记录并完成可见性/收藏装饰（不做任何过滤）。"""
     order_clause = _sort_expression(sort_by, sort_order)
     rows = conn.execute(
         f"""
-        SELECT raw_json, status
+        SELECT raw_json, status, is_favorite
         FROM result_items
-        WHERE {where_clause}
+        WHERE result_filename = ?
         ORDER BY {order_clause}
         """,
-        tuple(params),
+        (filename,),
     ).fetchall()
     blacklist_keywords = _load_blacklist_keywords_from_conn(conn, filename)
 
     records: list[dict] = []
     for row in rows:
-        record = _parse_raw_record(str(row["raw_json"]), status=row["status"])
-        decorated = _decorate_record_visibility(record, row["status"], blacklist_keywords)
-        if include_hidden or _is_record_visible(decorated):
-            records.append(decorated)
+        record = _parse_raw_record(
+            str(row["raw_json"]),
+            status=row["status"],
+            is_favorite=bool(row["is_favorite"]),
+        )
+        records.append(
+            _decorate_record_visibility(record, row["status"], blacklist_keywords)
+        )
     return records
+
+
+def _apply_record_filters(
+    records: list[dict],
+    *,
+    ai_recommended_only: bool = False,
+    keyword_recommended_only: bool = False,
+    include_hidden: bool = False,
+    search: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    found_since: str | None = None,
+    category: str | None = None,
+) -> list[dict]:
+    """在装饰后的记录上应用过滤（分类/搜索/价格/时间/收藏/可见性）。"""
+    search_text = (search or "").strip().lower()
+    effective_category = category or CATEGORY_ALL
+    show_hidden_only = effective_category == CATEGORY_HIDDEN
+
+    filtered: list[dict] = []
+    for record in records:
+        if show_hidden_only:
+            if not _is_record_visible(record):
+                filtered.append(record)
+            continue
+        if not include_hidden and not _is_record_visible(record):
+            continue
+        if not _record_matches_category(record, effective_category):
+            continue
+        if ai_recommended_only and not _is_ai_recommended_record(record):
+            continue
+        if keyword_recommended_only and not _is_keyword_hit_record(record):
+            continue
+        if search_text and search_text not in _record_search_text(record).lower():
+            continue
+        if min_price is not None or max_price is not None:
+            price = _record_price(record)
+            if price is None:
+                continue
+            if min_price is not None and price < min_price:
+                continue
+            if max_price is not None and price > max_price:
+                continue
+        # 爬取时间与 found_since 均为本地 naive ISO 字符串，可直接字典序比较
+        if found_since and not str(record.get("爬取时间") or "") >= found_since:
+            continue
+        filtered.append(record)
+    return filtered
+
+
+def _sort_records_by_value_score(records: list[dict], sort_order: str) -> None:
+    """按 AI 性价比分排序，缺失分数的记录固定排在末尾。"""
+    reverse = sort_order != "asc"
+    scored = [record for record in records if _record_value_score(record) is not None]
+    unscored = [record for record in records if _record_value_score(record) is None]
+    scored.sort(key=_record_value_score, reverse=reverse)
+    records[:] = scored + unscored
+
+
+def _count_result_categories(records: list[dict]) -> dict[str, int]:
+    """统计各分类数量（基于全部记录，不叠加搜索/价格等过滤条件）。"""
+    visible = [record for record in records if _is_record_visible(record)]
+    hidden_count = len(records) - len(visible)
+    return {
+        CATEGORY_ALL: len(visible),
+        CATEGORY_AI_RECOMMENDED: sum(1 for r in visible if _is_ai_recommended_record(r)),
+        CATEGORY_HIGH_VALUE: sum(1 for r in visible if _is_high_value_record(r)),
+        CATEGORY_KEYWORD_HIT: sum(1 for r in visible if _is_keyword_hit_record(r)),
+        CATEGORY_FAVORITE: sum(1 for r in visible if r.get("_is_favorite") is True),
+        CATEGORY_HIDDEN: hidden_count,
+    }
+
+
+def _load_filtered_records_from_conn(
+    conn,
+    *,
+    filename: str,
+    ai_recommended_only: bool = False,
+    keyword_recommended_only: bool = False,
+    sort_by: str = "crawl_time",
+    sort_order: str = "desc",
+    include_hidden: bool = False,
+    search: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    found_since: str | None = None,
+    category: str | None = None,
+) -> list[dict]:
+    records = _load_decorated_records_from_conn(
+        conn, filename=filename, sort_by=sort_by, sort_order=sort_order
+    )
+    return _apply_record_filters(
+        records,
+        ai_recommended_only=ai_recommended_only,
+        keyword_recommended_only=keyword_recommended_only,
+        include_hidden=include_hidden,
+        search=search,
+        min_price=min_price,
+        max_price=max_price,
+        found_since=found_since,
+        category=category,
+    )
 
 
 async def save_result_record(record: dict, keyword: str, platform: str = "xianyu") -> bool:
@@ -256,14 +415,19 @@ def _delete_result_file_records_sync(filename: str) -> int:
 async def query_result_records(
     filename: str,
     *,
-    ai_recommended_only: bool,
-    keyword_recommended_only: bool,
-    sort_by: str,
-    sort_order: str,
-    page: int,
-    limit: int,
+    ai_recommended_only: bool = False,
+    keyword_recommended_only: bool = False,
+    sort_by: str = "crawl_time",
+    sort_order: str = "desc",
+    page: int = 1,
+    limit: int = 20,
     include_hidden: bool = False,
-) -> tuple[int, list[dict]]:
+    search: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    found_since: str | None = None,
+    category: str | None = None,
+) -> tuple[int, list[dict], dict[str, int]]:
     return await asyncio.to_thread(
         _query_result_records_sync,
         filename,
@@ -274,6 +438,11 @@ async def query_result_records(
         page,
         limit,
         include_hidden,
+        search,
+        min_price,
+        max_price,
+        found_since,
+        category,
     )
 
 
@@ -286,31 +455,60 @@ def _query_result_records_sync(
     page: int,
     limit: int,
     include_hidden: bool,
-) -> tuple[int, list[dict]]:
+    search: str | None,
+    min_price: float | None,
+    max_price: float | None,
+    found_since: str | None,
+    category: str | None,
+) -> tuple[int, list[dict], dict[str, int]]:
     bootstrap_sqlite_storage()
     offset = max(page - 1, 0) * limit
     with sqlite_connection() as conn:
-        records = _load_filtered_records_from_conn(
-            conn,
-            filename=filename,
-            ai_recommended_only=ai_recommended_only,
-            keyword_recommended_only=keyword_recommended_only,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            include_hidden=include_hidden,
+        all_records = _load_decorated_records_from_conn(
+            conn, filename=filename, sort_by=sort_by, sort_order=sort_order
         )
+    counts = _count_result_categories(all_records)
+    records = _apply_record_filters(
+        all_records,
+        ai_recommended_only=ai_recommended_only,
+        keyword_recommended_only=keyword_recommended_only,
+        include_hidden=include_hidden,
+        search=search,
+        min_price=min_price,
+        max_price=max_price,
+        found_since=found_since,
+        category=category,
+    )
+    if sort_by == "value_score":
+        _sort_records_by_value_score(records, sort_order)
     total = len(records)
-    return total, records[offset: offset + limit]
+    return total, records[offset: offset + limit], counts
+
+
+async def load_result_category_counts(filename: str) -> dict[str, int]:
+    return await asyncio.to_thread(_load_result_category_counts_sync, filename)
+
+
+def _load_result_category_counts_sync(filename: str) -> dict[str, int]:
+    bootstrap_sqlite_storage()
+    with sqlite_connection() as conn:
+        records = _load_decorated_records_from_conn(conn, filename=filename)
+    return _count_result_categories(records)
 
 
 async def load_all_result_records(
     filename: str,
     *,
-    ai_recommended_only: bool,
-    keyword_recommended_only: bool,
-    sort_by: str,
-    sort_order: str,
+    ai_recommended_only: bool = False,
+    keyword_recommended_only: bool = False,
+    sort_by: str = "crawl_time",
+    sort_order: str = "desc",
     include_hidden: bool = False,
+    search: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    found_since: str | None = None,
+    category: str | None = None,
 ) -> list[dict]:
     return await asyncio.to_thread(
         _load_all_result_records_sync,
@@ -320,6 +518,11 @@ async def load_all_result_records(
         sort_by,
         sort_order,
         include_hidden,
+        search,
+        min_price,
+        max_price,
+        found_since,
+        category,
     )
 
 
@@ -330,10 +533,15 @@ def _load_all_result_records_sync(
     sort_by: str,
     sort_order: str,
     include_hidden: bool,
+    search: str | None,
+    min_price: float | None,
+    max_price: float | None,
+    found_since: str | None,
+    category: str | None,
 ) -> list[dict]:
     bootstrap_sqlite_storage()
     with sqlite_connection() as conn:
-        return _load_filtered_records_from_conn(
+        records = _load_filtered_records_from_conn(
             conn,
             filename=filename,
             ai_recommended_only=ai_recommended_only,
@@ -341,7 +549,15 @@ def _load_all_result_records_sync(
             sort_by=sort_by,
             sort_order=sort_order,
             include_hidden=include_hidden,
+            search=search,
+            min_price=min_price,
+            max_price=max_price,
+            found_since=found_since,
+            category=category,
         )
+    if sort_by == "value_score":
+        _sort_records_by_value_score(records, sort_order)
+    return records
 
 
 async def build_result_ndjson(filename: str) -> str:
@@ -400,6 +616,23 @@ def _load_result_summary_sync(filename: str) -> dict | None:
         "latest_record": visible_records[0],
         "latest_recommendation": recommended_records[0] if recommended_records else None,
     }
+
+
+async def update_item_favorite(filename: str, item_id: str, favorite: bool) -> bool:
+    return await asyncio.to_thread(
+        _update_item_favorite_sync, filename, item_id, favorite
+    )
+
+
+def _update_item_favorite_sync(filename: str, item_id: str, favorite: bool) -> bool:
+    bootstrap_sqlite_storage()
+    with sqlite_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE result_items SET is_favorite = ? WHERE result_filename = ? AND item_id = ?",
+            (1 if favorite else 0, filename, item_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
 
 
 async def update_item_status(filename: str, item_id: str, status: str) -> bool:

@@ -144,6 +144,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         conn.execute(statement)
     _migrate_result_items_status(conn)
+    _migrate_result_items_favorite(conn)
     _migrate_tasks_platform(conn)
     conn.commit()
 
@@ -183,6 +184,27 @@ def _migrate_result_items_status(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_results_filename_status_crawl"
         " ON result_items(result_filename, status, crawl_time DESC)"
+    )
+
+
+def _migrate_result_items_favorite(conn: sqlite3.Connection) -> None:
+    """为 result_items 表添加 is_favorite 列（仅执行一次）。"""
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE key = 'migration:result_items_favorite'"
+    ).fetchone()
+    if row is not None:
+        return
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(result_items)").fetchall()]
+    if "is_favorite" not in cols:
+        conn.execute(
+            "ALTER TABLE result_items ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0"
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(key, value) VALUES ('migration:result_items_favorite', 'done')"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_results_filename_favorite_crawl"
+        " ON result_items(result_filename, is_favorite, crawl_time DESC)"
     )
 
 

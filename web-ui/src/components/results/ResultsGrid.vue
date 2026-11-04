@@ -1,18 +1,31 @@
 <script setup lang="ts">
 import type { ResultItem } from '@/types/result.d.ts'
 import { useI18n } from 'vue-i18n'
+import { Loader2 } from 'lucide-vue-next'
 import ResultCard from './ResultCard.vue'
+import { Button } from '@/components/ui/button'
 
 interface Props {
   results: ResultItem[]
   isLoading: boolean
+  isLoadingMore?: boolean
+  canLoadMore?: boolean
+  totalItems?: number
+  newSince?: string | null
 }
 
-defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  isLoadingMore: false,
+  canLoadMore: false,
+  totalItems: 0,
+  newSince: null,
+})
 const { t } = useI18n()
 
 const emit = defineEmits<{
   (e: 'toggle-block', item: ResultItem): void
+  (e: 'toggle-favorite', item: ResultItem): void
+  (e: 'load-more'): void
 }>()
 const skeletonItems = Array.from({ length: 8 }, (_, index) => index)
 </script>
@@ -45,8 +58,26 @@ const skeletonItems = Array.from({ length: 8 }, (_, index) => index)
     <div v-else-if="results.length === 0" class="app-surface text-center py-12 text-gray-500">
       {{ t('results.grid.empty') }}
     </div>
-    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-      <ResultCard v-for="item in results" :key="item.商品信息.商品ID" :item="item" @toggle-block="emit('toggle-block', $event)" />
+    <div v-else>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        <ResultCard
+          v-for="item in results"
+          :key="item.商品信息.商品ID"
+          :item="item"
+          :new-since="props.newSince"
+          @toggle-block="emit('toggle-block', $event)"
+          @toggle-favorite="emit('toggle-favorite', $event)"
+        />
+      </div>
+      <div v-if="canLoadMore || totalItems > results.length" class="mt-8 flex flex-col items-center gap-2">
+        <Button variant="outline" :disabled="isLoadingMore" @click="emit('load-more')">
+          <Loader2 v-if="isLoadingMore" class="w-4 h-4 mr-2 animate-spin" />
+          {{ t('results.grid.loadMore') }}
+        </Button>
+        <span class="text-xs text-slate-400">
+          {{ t('results.grid.shownOfTotal', { shown: results.length, total: totalItems }) }}
+        </span>
+      </div>
     </div>
   </div>
 </template>

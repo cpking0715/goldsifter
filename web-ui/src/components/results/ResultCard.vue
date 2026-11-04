@@ -10,17 +10,20 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import Badge from '@/components/ui/badge/Badge.vue'
-import { ExternalLink, TrendingUp, TrendingDown, Info, User, Clock, CheckCircle2, XCircle, AlertCircle, EyeOff, Eye } from 'lucide-vue-next'
+import { ExternalLink, TrendingUp, TrendingDown, Info, User, Clock, CheckCircle2, XCircle, AlertCircle, EyeOff, Eye, Star } from 'lucide-vue-next'
 import { formatDateTime } from '@/i18n'
 import { platformLabel } from '@/lib/platform'
 
 interface Props {
   item: ResultItem
+  /** 「新商品」判定基线：爬取时间晚于该值的商品显示新角标 */
+  newSince?: string | null
 }
 
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'toggle-block', item: ResultItem): void
+  (e: 'toggle-favorite', item: ResultItem): void
 }>()
 const { t } = useI18n()
 
@@ -51,6 +54,14 @@ const hiddenLabel = computed(() => {
 })
 
 const expanded = ref(false)
+const isFavorite = computed(() => props.item._is_favorite === true)
+const isNew = computed(() => {
+  if (!props.newSince || !props.item.爬取时间) return false
+  return props.item.爬取时间 > props.newSince
+})
+const productTags = computed(() =>
+  (info.商品标签 || []).filter(Boolean).slice(0, 3)
+)
 </script>
 
 <template>
@@ -77,11 +88,23 @@ const expanded = ref(false)
         <Badge v-if="isRecommended && !isHidden" variant="default" class="bg-emerald-500/90 backdrop-blur-md border-none shadow-sm">
           {{ t('results.card.curated') }}
         </Badge>
+        <Badge v-if="isNew && !isHidden" variant="default" class="bg-sky-500/90 backdrop-blur-md border-none shadow-sm">
+          {{ t('results.card.newBadge') }}
+        </Badge>
         <Badge v-if="isRuleHidden" variant="secondary" class="bg-slate-900/75 text-white border-none backdrop-blur-md shadow-sm">
           {{ t('results.card.blacklisted') }}
         </Badge>
       </div>
       <div class="absolute top-3 right-3 flex gap-1.5">
+        <button
+          type="button"
+          @click="emit('toggle-favorite', props.item)"
+          :aria-label="isFavorite ? t('results.card.unfavorite') : t('results.card.favorite')"
+          :class="isFavorite ? 'text-amber-400 bg-amber-400/20' : 'text-white bg-white/30 hover:bg-white/50'"
+          class="flex rounded-full p-1.5 backdrop-blur-md border border-white/40 shadow-sm transition-all"
+        >
+          <Star class="w-4 h-4" :class="{ 'fill-current': isFavorite }" />
+        </button>
         <button
           v-if="canToggleBlock"
           type="button"
@@ -115,6 +138,15 @@ const expanded = ref(false)
       <div class="flex items-baseline gap-1 mt-2">
         <span class="text-2xl font-bold text-rose-600 tracking-tight">{{ info.当前售价 }}</span>
         <span v-if="info['商品原价']" class="text-xs text-slate-400 line-through mb-1">{{ info['商品原价'] }}</span>
+      </div>
+      <div v-if="productTags.length" class="flex flex-wrap gap-1 mt-2">
+        <span
+          v-for="tag in productTags"
+          :key="tag"
+          class="rounded-md bg-slate-100 text-slate-500 px-1.5 py-0.5 text-[10px] font-medium"
+        >
+          {{ tag }}
+        </span>
       </div>
     </CardHeader>
 

@@ -24,13 +24,20 @@ const {
   selectedFile,
   results,
   insights,
+  counts,
+  totalItems,
   filters,
   isLoading,
+  isLoadingMore,
+  canLoadMore,
   error,
+  newSince,
+  loadMore,
   refreshResults,
   exportSelectedResults,
   deleteSelectedFile,
   toggleItemBlock,
+  toggleItemFavorite,
   blacklistKeywords,
   isSavingBlacklist,
   saveBlacklistRules,
@@ -143,11 +150,14 @@ async function handleSaveBlacklistRules() {
       :file-options="fileOptions"
       :is-ready="isFileOptionsReady"
       v-model:selectedFile="selectedFile"
-      v-model:aiRecommendedOnly="filters.ai_recommended_only"
-      v-model:keywordRecommendedOnly="filters.keyword_recommended_only"
-      v-model:includeHidden="filters.include_hidden"
+      v-model:category="filters.category"
+      v-model:search="filters.search"
+      v-model:minPrice="filters.minPrice"
+      v-model:maxPrice="filters.maxPrice"
+      v-model:foundWithin="filters.foundWithin"
       v-model:sortBy="filters.sort_by"
       v-model:sortOrder="filters.sort_order"
+      :counts="counts"
       :is-loading="isLoading"
       @refresh="refreshResults"
       @manage-blacklist="openBlacklistDialog"
@@ -157,7 +167,17 @@ async function handleSaveBlacklistRules() {
 
     <ResultsInsightsPanel :insights="insights" :selected-task-label="selectedTaskLabel" />
 
-    <ResultsGrid :results="results" :is-loading="isLoading" @toggle-block="toggleItemBlock" />
+    <ResultsGrid
+      :results="results"
+      :is-loading="isLoading"
+      :is-loading-more="isLoadingMore"
+      :can-load-more="canLoadMore"
+      :total-items="totalItems"
+      :new-since="newSince"
+      @toggle-block="toggleItemBlock"
+      @toggle-favorite="toggleItemFavorite"
+      @load-more="loadMore"
+    />
 
     <Dialog v-model:open="isDeleteDialogOpen">
       <DialogContent class="sm:max-w-[420px]">

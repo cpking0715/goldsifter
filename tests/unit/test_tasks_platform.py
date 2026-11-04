@@ -84,6 +84,42 @@ def test_legacy_tasks_table_gains_xianyu_platform(tmp_path):
     assert stored == "xianyu"
 
 
+def test_legacy_result_items_gain_favorite_column_idempotently(tmp_path):
+    from src.infrastructure.persistence.sqlite_connection import (
+        _migrate_result_items_favorite,
+    )
+
+    conn = sqlite3.connect(tmp_path / "legacy.sqlite3")
+    conn.execute("CREATE TABLE app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute(
+        """
+        CREATE TABLE result_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            result_filename TEXT NOT NULL,
+            link_unique_key TEXT NOT NULL,
+            crawl_time TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            raw_json TEXT NOT NULL
+        )
+        """
+    )
+    _migrate_result_items_favorite(conn)
+    conn.commit()
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(result_items)")]
+    assert "is_favorite" in cols
+    indexes = {
+        row[1]
+        for row in conn.execute("PRAGMA index_list(result_items)")
+    }
+    assert "idx_results_filename_favorite_crawl" in indexes
+
+    # 重复执行不报错也不重复加列
+    _migrate_result_items_favorite(conn)
+    conn.commit()
+    cols_again = [row[1] for row in conn.execute("PRAGMA table_info(result_items)")]
+    assert cols_again.count("is_favorite") == 1
+
+
 def test_platform_roundtrip(tmp_path):
     repo = SqliteTaskRepository(db_path=str(tmp_path / "app.sqlite3"), legacy_config_file=None)
     saved = asyncio.run(repo.save(_task(platform="kongfz")))

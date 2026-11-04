@@ -414,3 +414,306 @@ def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, mon
     assert download_resp.status_code == 200
     assert "MacBook Air Intel i5 8+256" in download_resp.text
     assert "MacBook Pro Intel 13寸" in download_resp.text
+
+
+def _build_category_fixture(path):
+    """构造覆盖各分类的测试数据：AI推荐/高性价比/关键词命中/普通/低价。"""
+    records = [
+        {
+            "爬取时间": "2026-01-05T10:00:00",
+            "搜索关键字": "demo",
+            "任务名称": "Demo 任务",
+            "商品信息": {
+                "商品ID": "3001",
+                "商品标题": "iPhone 17 Pro 全新未拆封",
+                "商品链接": "https://www.goofish.com/item?id=3001",
+                "当前售价": "¥5000",
+                "发布时间": "2026-01-05 09:00",
+            },
+            "卖家信息": {"卖家昵称": "卖家甲"},
+            "ai_analysis": {
+                "analysis_source": "ai",
+                "is_recommended": True,
+                "reason": "价格与成色俱佳",
+                "value_score": 85,
+            },
+        },
+        {
+            "爬取时间": "2026-01-05T11:00:00",
+            "搜索关键字": "demo",
+            "任务名称": "Demo 任务",
+            "商品信息": {
+                "商品ID": "3002",
+                "商品标题": "iPhone 17 普通版",
+                "商品链接": "https://www.goofish.com/item?id=3002",
+                "当前售价": "¥3000",
+                "发布时间": "2026-01-05 10:00",
+            },
+            "卖家信息": {"卖家昵称": "卖家乙"},
+            "ai_analysis": {
+                "analysis_source": "ai",
+                "is_recommended": False,
+                "reason": "成色存疑",
+                "value_score": 40,
+            },
+        },
+        {
+            "爬取时间": "2026-01-05T12:00:00",
+            "搜索关键字": "demo",
+            "任务名称": "Demo 任务",
+            "商品信息": {
+                "商品ID": "3003",
+                "商品标题": "iPhone 17 Pro Max 关键词命中",
+                "商品链接": "https://www.goofish.com/item?id=3003",
+                "当前售价": "¥6500",
+                "发布时间": "2026-01-05 11:00",
+            },
+            "卖家信息": {"卖家昵称": "卖家丙"},
+            "ai_analysis": {
+                "analysis_source": "keyword",
+                "is_recommended": True,
+                "keyword_hit_count": 2,
+                "reason": "命中 2 个关键词",
+            },
+        },
+        {
+            "爬取时间": "2026-01-05T13:00:00",
+            "搜索关键字": "demo",
+            "任务名称": "Demo 任务",
+            "商品信息": {
+                "商品ID": "3004",
+                "商品标题": "安卓备用机",
+                "商品链接": "https://www.goofish.com/item?id=3004",
+                "当前售价": "¥800",
+                "发布时间": "2026-01-05 12:00",
+            },
+            "卖家信息": {"卖家昵称": "卖家丁"},
+            "ai_analysis": {
+                "analysis_source": "ai",
+                "is_recommended": False,
+                "reason": "与目标不符",
+                "value_score": 30,
+            },
+        },
+    ]
+    _write_jsonl(path, records)
+
+
+def _make_results_client():
+    app = FastAPI()
+    app.include_router(results.router)
+    return TestClient(app)
+
+
+def test_results_category_counts_and_filters(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    resp = client.get("/api/results/demo_full_data.jsonl")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_items"] == 4
+    assert data["counts"] == {
+        "all": 4,
+        "ai_recommended": 1,
+        "high_value": 1,
+        "keyword_hit": 1,
+        "favorite": 0,
+        "hidden": 0,
+    }
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"category": "ai_recommended"}
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_items"] == 1
+    assert data["items"][0]["商品信息"]["商品ID"] == "3001"
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"category": "high_value"}
+    )
+    assert resp.status_code == 200
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3001"]
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"category": "keyword_hit"}
+    )
+    assert resp.status_code == 200
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3003"]
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"category": "invalid_cat"}
+    )
+    assert resp.status_code == 422
+
+    # 旧布尔参数应映射到对应分类
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"ai_recommended_only": True}
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3001"]
+
+
+def test_results_search_price_and_found_since_filters(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    # 标题搜索
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"search": "pro max"}
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3003"]
+
+    # 卖家搜索
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"search": "卖家乙"}
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3002"]
+
+    # 价格区间
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"min_price": 4000}
+    )
+    assert sorted(item["商品信息"]["商品ID"] for item in resp.json()["items"]) == ["3001", "3003"]
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"max_price": 1000}
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3004"]
+
+    # 非法区间
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"min_price": 5000, "max_price": 1000},
+    )
+    assert resp.status_code == 400
+
+    # 发现时间（本地 naive ISO 字符串比较）
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"found_since": "2026-01-05T11:30:00"},
+    )
+    assert sorted(item["商品信息"]["商品ID"] for item in resp.json()["items"]) == ["3003", "3004"]
+
+
+def test_results_favorite_and_hidden_category(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    # 收藏 3004
+    resp = client.patch(
+        "/api/results/demo_full_data.jsonl/items/3004/favorite",
+        json={"favorite": True},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["favorite"] is True
+
+    resp = client.get("/api/results/demo_full_data.jsonl/counts")
+    assert resp.status_code == 200
+    assert resp.json()["counts"]["favorite"] == 1
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"category": "favorite"}
+    )
+    data = resp.json()
+    assert data["total_items"] == 1
+    assert data["items"][0]["_is_favorite"] is True
+    assert data["items"][0]["商品信息"]["商品ID"] == "3004"
+
+    # 收藏不存在的商品
+    resp = client.patch(
+        "/api/results/demo_full_data.jsonl/items/9999/favorite",
+        json={"favorite": True},
+    )
+    assert resp.status_code == 404
+
+    # 隐藏 3002 后，已屏蔽分类只展示它，且各分类计数联动
+    resp = client.patch(
+        "/api/results/demo_full_data.jsonl/items/3002/status",
+        json={"status": "hidden"},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"category": "hidden"}
+    )
+    data = resp.json()
+    assert data["total_items"] == 1
+    assert data["items"][0]["商品信息"]["商品ID"] == "3002"
+    assert data["items"][0]["_hidden_reason"] == "manual"
+
+    resp = client.get("/api/results/demo_full_data.jsonl/counts")
+    counts = resp.json()["counts"]
+    assert counts["all"] == 3
+    assert counts["hidden"] == 1
+    assert counts["favorite"] == 1
+
+
+def test_results_value_score_sort_and_pagination(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    # 性价比排序：有分按分数排，无分（3003）固定在末尾
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"sort_by": "value_score", "sort_order": "desc"},
+    )
+    ids = [item["商品信息"]["商品ID"] for item in resp.json()["items"]]
+    assert ids == ["3001", "3002", "3004", "3003"]
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"sort_by": "value_score", "sort_order": "asc"},
+    )
+    ids = [item["商品信息"]["商品ID"] for item in resp.json()["items"]]
+    assert ids == ["3004", "3002", "3001", "3003"]
+
+    # 分页：total 恒定，翻页取剩余
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"page": 1, "limit": 2}
+    )
+    data = resp.json()
+    assert data["total_items"] == 4
+    assert len(data["items"]) == 2
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl", params={"page": 2, "limit": 2}
+    )
+    data = resp.json()
+    assert data["total_items"] == 4
+    assert [item["商品信息"]["商品ID"] for item in data["items"]] == ["3002", "3001"]
+
+
+def test_results_export_with_new_filters(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl/export",
+        params={"category": "high_value"},
+    )
+    assert resp.status_code == 200
+    assert "iPhone 17 Pro 全新未拆封" in resp.text
+    assert "安卓备用机" not in resp.text
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl/export",
+        params={"max_price": 1000},
+    )
+    assert resp.status_code == 200
+    assert "安卓备用机" in resp.text
+    assert "iPhone 17 普通版" not in resp.text

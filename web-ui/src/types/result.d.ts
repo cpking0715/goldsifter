@@ -93,6 +93,15 @@ export interface ResultInsights {
   latest_snapshot_at?: string | null;
 }
 
+export interface ResultCategoryCounts {
+  all: number;
+  ai_recommended: number;
+  high_value: number;
+  keyword_hit: number;
+  favorite: number;
+  hidden: number;
+}
+
 export interface ResultItem {
   "爬取时间": string;
   "搜索关键字": string;
@@ -106,4 +115,5 @@ export interface ResultItem {
   _effective_hidden?: boolean;
   _hidden_reason?: 'manual' | 'rule' | 'expired' | null;
   _matched_blacklist_keywords?: string[];
+  _is_favorite?: boolean;
 }
