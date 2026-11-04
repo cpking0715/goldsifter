@@ -2,7 +2,7 @@ import zhCNExtra from '@/i18n/messages/zh-CN-extra'
 
 const zhCN = {
   app: {
-    name: '闲鱼智能监控',
+    name: '千淘',
   },
   platforms: {
     ebay: 'eBay（海外捡漏）',

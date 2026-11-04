@@ -109,8 +109,8 @@ async def lifespan(app: FastAPI):
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="闲鱼智能监控机器人",
-    description="基于AI的闲鱼商品监控系统",
+    title="千淘 · AI 二手捡漏雷达",
+    description="多平台二手监控：闲鱼 / 孔夫子 / 更多平台，AI 看图识货",
     version="2.0.0",
     lifespan=lifespan
 )

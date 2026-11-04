@@ -28,7 +28,7 @@ class BarkClient(NotificationClient):
             "body": message.content,
             "url": message.mobile_link or message.desktop_link,
             "level": "timeSensitive",
-            "group": "闲鱼监控"
+            "group": "千淘"
         }
 
         if message.image_url:

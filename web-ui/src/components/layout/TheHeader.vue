@@ -12,7 +12,7 @@ import {
   HelpCircle,
   Menu
 } from 'lucide-vue-next'
-import Badge from '@/components/ui/badge/Badge.vue'
+
 import { useMobileNav } from '@/composables/useMobileNav'
 import { useI18n } from 'vue-i18n'
 
@@ -49,11 +49,8 @@ function goPrompts() {
         <Zap class="w-5 h-5 text-white fill-white" />
       </div>
       <h1 class="text-lg font-black text-slate-800 tracking-tighter">
-        AI <span class="text-primary">Xianyu</span> Hunter
+        千淘 <span class="text-primary">Qiantao</span>
       </h1>
-      <Badge variant="outline" class="ml-2 text-[10px] font-bold border-primary/20 text-primary bg-primary/5 uppercase tracking-widest hidden sm:flex">
-        PRO
-      </Badge>
     </RouterLink>
 
     <!-- Search & Navigation -->
