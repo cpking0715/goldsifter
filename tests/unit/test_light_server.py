@@ -141,3 +141,34 @@ def test_telemetry_rate_limit(light_server):
     codes = [light_server.post("/api/v1/telemetry/snapshots", json=body).status_code for _ in range(25)]
     assert codes.count(200) == 20
     assert codes.count(429) >= 1
+
+
+def test_market_keywords_and_summary(light_server):
+    """行情聚合：写入快照后 keywords 列表与 summary 日趋势可查。"""
+    server_app._RATE_BUCKETS.clear()
+    items = [
+        {"platform": "youpin", "keyword": "AK-47", "price": 120.0, "title": "t1", "captured_at": "2026-11-01T10:00:00"},
+        {"platform": "youpin", "keyword": "AK-47", "price": 180.0, "title": "t2", "captured_at": "2026-11-02T10:00:00"},
+        {"platform": "kongfz", "keyword": "红楼梦", "price": 40.0, "title": "t3", "captured_at": "2026-11-02T11:00:00"},
+    ]
+    resp = light_server.post("/api/v1/telemetry/snapshots", json={"items": items})
+    assert resp.status_code == 200
+
+    kws = light_server.get("/api/v1/market/keywords").json()
+    pairs = {(k["platform"], k["keyword"]) for k in kws}
+    assert ("youpin", "AK-47") in pairs and ("kongfz", "红楼梦") in pairs
+    ak = next(k for k in kws if k["keyword"] == "AK-47")
+    assert ak["samples"] == 2 and ak["min_price"] == 120.0 and ak["max_price"] == 180.0
+
+    summary = light_server.get("/api/v1/market/summary", params={"platform": "youpin", "keyword": "AK-47"}).json()
+    assert summary["total_samples"] == 2
+    # latest = 最新采集日的样本（11-02 仅 180 一条）
+    assert summary["latest"]["sample_count"] == 1
+    assert summary["latest"]["min_price"] == 180.0
+    # 两天趋势都应出现
+    days = [d["day"] for d in summary["daily_trend"]]
+    assert "2026-11-01" in days and "2026-11-02" in days
+
+    # keyword 必填校验
+    resp = light_server.get("/api/v1/market/summary")
+    assert resp.status_code == 400

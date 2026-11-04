@@ -16,6 +16,7 @@ const zhCN = {
     en: 'English',
   },
   routes: {
+    market: '全网行情',
     login: '登录',
     dashboard: '监控概览',
     tasks: '任务管理',
@@ -74,6 +75,7 @@ const zhCN = {
     accountManagement: '账号管理',
   },
   sidebar: {
+    market: '全网行情',
     dashboard: '监控概览',
     tasks: '任务管理',
     accounts: '账号管理',
@@ -388,6 +390,29 @@ const zhCN = {
     },
   },
   
+
+  market: {
+    title: '全网行情',
+    description: '基于全体用户匿名回传的价格快照聚合——样本越大，行情越准。开启回传即贡献并享受全网数据。',
+    keywords: '行情关键词',
+    filterPlaceholder: '筛选关键词或平台…',
+    empty: '暂无行情数据——跑几个任务并开启行情回馈后，这里会越来越热闹',
+    detailTitle: '行情详情',
+    selectHint: '选择左侧关键词查看全网行情',
+    samples: '{n} 样本',
+    avg: '均价',
+    range: '区间 ¥{lo}~¥{hi}',
+    totalSamples: '全网累计 {n} 条快照',
+    latestAvg: '最新日均价',
+    latestMedian: '最新日中位',
+    latestLow: '最新日最低',
+    latestHigh: '最新日最高',
+    trend30d: '近 30 天均价趋势',
+    noTrend: '暂无趋势数据（快照积累中）',
+    proRequired: '行情数据为 Pro 功能',
+    proHint: '激活授权后解锁全网众包行情：跨用户大样本的价格趋势与低位提醒基础。',
+    goActivate: '去激活',
+  },
   setup: {
     banner: {
       title: '完成初始设置（三步）',

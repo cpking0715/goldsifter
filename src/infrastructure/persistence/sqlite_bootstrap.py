@@ -230,12 +230,13 @@ def _insert_price_snapshot(conn, record: dict) -> None:
     conn.execute(
         """
         INSERT OR IGNORE INTO price_snapshots (
-            keyword_slug, keyword, task_name, snapshot_time, snapshot_day, run_id,
+            platform, keyword_slug, keyword, task_name, snapshot_time, snapshot_day, run_id,
             item_id, title, price, price_display, tags_json, region, seller,
             publish_time, link
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            "xianyu",
             slug,
             keyword,
             record.get("task_name", ""),

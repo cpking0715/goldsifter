@@ -23,8 +23,8 @@ DEFAULT_HISTORY_WINDOW_DAYS = 30
 
 
 def normalize_keyword_slug(keyword: str, platform: str = PLATFORM_XIANYU) -> str:
-    """关键词 slug；非闲鱼平台加平台前缀，避免跨平台行情数据混写。"""
-    return _keyword_slug_with_platform(keyword, platform)
+    """关键词 slug（归一化，不带平台前缀）；平台维度由 price_snapshots.platform 列承载。"""
+    return _keyword_slug_with_platform(keyword, PLATFORM_XIANYU)
 
 
 def build_price_history_path(keyword: str, platform: str = PLATFORM_XIANYU) -> str:
@@ -131,12 +131,13 @@ def record_market_snapshots(
             conn.execute(
                 """
                 INSERT OR IGNORE INTO price_snapshots (
-                    keyword_slug, keyword, task_name, snapshot_time, snapshot_day,
+                    platform, keyword_slug, keyword, task_name, snapshot_time, snapshot_day,
                     run_id, item_id, title, price, price_display, tags_json, region,
                     seller, publish_time, link
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    platform,
                     keyword_slug,
                     record.get("keyword", keyword),
                     record.get("task_name", task_name),
@@ -165,10 +166,10 @@ def load_price_snapshots(keyword: str, platform: str = PLATFORM_XIANYU) -> list[
             """
             SELECT *
             FROM price_snapshots
-            WHERE keyword_slug = ?
+            WHERE keyword_slug = ? AND platform = ?
             ORDER BY snapshot_time ASC, id ASC
             """,
-            (normalize_keyword_slug(keyword, platform),),
+            (normalize_keyword_slug(keyword), platform),
         ).fetchall()
     snapshots: list[dict] = []
     for row in rows:
@@ -197,8 +198,8 @@ def delete_price_snapshots(keyword: str, platform: str = PLATFORM_XIANYU) -> int
     bootstrap_sqlite_storage()
     with sqlite_connection() as conn:
         cursor = conn.execute(
-            "DELETE FROM price_snapshots WHERE keyword_slug = ?",
-            (normalize_keyword_slug(keyword, platform),),
+            "DELETE FROM price_snapshots WHERE keyword_slug = ? AND platform = ?",
+            (normalize_keyword_slug(keyword), platform),
         )
         conn.commit()
     return int(cursor.rowcount or 0)

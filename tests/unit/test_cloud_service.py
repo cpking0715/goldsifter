@@ -29,6 +29,7 @@ def _seed_snapshots(db_path: Path, rows: list[tuple]) -> None:
         """
         CREATE TABLE IF NOT EXISTS price_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform TEXT NOT NULL DEFAULT 'xianyu',
             keyword_slug TEXT NOT NULL, keyword TEXT NOT NULL, task_name TEXT,
             snapshot_time TEXT NOT NULL, snapshot_day TEXT, run_id TEXT,
             item_id TEXT, title TEXT, price REAL NOT NULL, price_display TEXT,
@@ -37,8 +38,8 @@ def _seed_snapshots(db_path: Path, rows: list[tuple]) -> None:
         """
     )
     conn.executemany(
-        "INSERT INTO price_snapshots (keyword_slug, keyword, title, price, tags_json,"
-        " snapshot_time, seller, region, link) VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO price_snapshots (platform, keyword_slug, keyword, title, price, tags_json,"
+        " snapshot_time, seller, region, link) VALUES (?,?,?,?,?,?,?,?,?,?)",
         rows,
     )
     conn.commit()
@@ -162,9 +163,9 @@ def test_license_verify_offline_grace(cloud_env, monkeypatch):
 def test_telemetry_sanitizes_and_advances_watermark(cloud_env, tmp_path, monkeypatch):
     db = tmp_path / "local.sqlite3"
     _seed_snapshots(db, [
-        ("kongfz_hongloumeng", "红楼梦", "红楼梦（全四册）", 40.0,
+        ("kongfz", "kongfz_hongloumeng", "红楼梦", "红楼梦（全四册）", 40.0,
          '["品相:九品", "包邮"]', "2026-11-02T10:00:00", "某书店", "上海", "https://book.kongfz.com/1/2"),
-        ("macbook", "macbook", "MacBook Pro M1", 7999.0,
+        ("xianyu", "macbook", "macbook", "MacBook Pro M1", 7999.0,
          "[]", "2026-11-02T10:01:00", "张三", "北京", "https://www.goofish.com/item?id=1"),
     ])
     monkeypatch.setenv("APP_DATABASE_FILE", str(db))

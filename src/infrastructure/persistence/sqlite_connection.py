@@ -73,6 +73,7 @@ SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS price_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        platform TEXT NOT NULL DEFAULT 'xianyu',
         keyword_slug TEXT NOT NULL,
         keyword TEXT NOT NULL,
         task_name TEXT NOT NULL,
@@ -146,7 +147,35 @@ def init_schema(conn: sqlite3.Connection) -> None:
     _migrate_result_items_status(conn)
     _migrate_result_items_favorite(conn)
     _migrate_tasks_platform(conn)
+    _migrate_snapshots_platform(conn)
     conn.commit()
+
+
+def _migrate_snapshots_platform(conn: sqlite3.Connection) -> None:
+    """price_snapshots 增加 platform 列（仅执行一次）。
+
+    存量数据回填：按 keyword_slug 的历史平台前缀推断 platform，
+    并把 slug 归一化为不带前缀（平台维度由列承载，根治前缀碰撞）。
+    """
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE key = 'migration:snapshots_platform'"
+    ).fetchone()
+    if row is not None:
+        return
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(price_snapshots)").fetchall()]
+    if "platform" not in cols:
+        conn.execute(
+            "ALTER TABLE price_snapshots ADD COLUMN platform TEXT NOT NULL DEFAULT 'xianyu'"
+        )
+    for prefix, platform in (("kongfz_", "kongfz"), ("youpin_", "youpin"), ("ebay_", "ebay")):
+        conn.execute(
+            "UPDATE price_snapshots SET platform = ?, keyword_slug = substr(keyword_slug, ?)"
+            " WHERE keyword_slug LIKE ? || '%'",
+            (platform, len(prefix) + 1, prefix),
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(key, value) VALUES ('migration:snapshots_platform', 'done')"
+    )
 
 
 def _migrate_tasks_platform(conn: sqlite3.Connection) -> None:

@@ -16,6 +16,7 @@ const enUS = {
     en: 'English',
   },
   routes: {
+    market: 'Market',
     login: 'Login',
     dashboard: 'Dashboard',
     tasks: 'Tasks',
@@ -74,6 +75,7 @@ const enUS = {
     accountManagement: 'Account Management',
   },
   sidebar: {
+    market: 'Market',
     dashboard: 'Dashboard',
     tasks: 'Tasks',
     accounts: 'Accounts',
@@ -388,6 +390,29 @@ const enUS = {
     },
   },
   
+
+  market: {
+    title: 'Market Overview',
+    description: 'Aggregated from anonymized price snapshots shared by all users — bigger samples, better prices.',
+    keywords: 'Tracked Keywords',
+    filterPlaceholder: 'Filter keyword or platform…',
+    empty: 'No market data yet — run tasks with data sharing enabled',
+    detailTitle: 'Market Detail',
+    selectHint: 'Pick a keyword to view network-wide market data',
+    samples: '{n} samples',
+    avg: 'avg',
+    range: 'range ¥{lo}~¥{hi}',
+    totalSamples: '{n} snapshots network-wide',
+    latestAvg: 'Latest avg',
+    latestMedian: 'Latest median',
+    latestLow: 'Latest low',
+    latestHigh: 'Latest high',
+    trend30d: '30-day avg trend',
+    noTrend: 'No trend data yet',
+    proRequired: 'Market data is a Pro feature',
+    proHint: 'Activate your license to unlock crowd-sourced market data.',
+    goActivate: 'Activate',
+  },
   setup: {
     banner: {
       title: 'Finish setup (3 steps)',

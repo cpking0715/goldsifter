@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
-import { 
+import {
+  TrendingUp, 
   LayoutDashboard, 
   ListTodo, 
   Users, 
@@ -23,6 +24,7 @@ const navItems = computed(() => [
   { to: '/dashboard', label: t('sidebar.dashboard'), icon: LayoutDashboard },
   { to: '/tasks', label: t('sidebar.tasks'), icon: ListTodo },
   { to: '/accounts', label: t('sidebar.accounts'), icon: Users },
+  { to: '/market', label: t('sidebar.market'), icon: TrendingUp },
   { to: '/results', label: t('sidebar.results'), icon: Layers },
   { to: '/logs', label: t('sidebar.logs'), icon: Terminal },
   { to: '/settings', label: t('sidebar.settings'), icon: Settings2 },

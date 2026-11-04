@@ -210,6 +210,22 @@ async def verify_license() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 通用云端 GET（行情代理等）
+# ---------------------------------------------------------------------------
+
+async def fetch_json(url: str):
+    """GET 云端 JSON；失败返回 None（调用方自行降级）。"""
+    try:
+        async with _http_client() as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        print(f"[云服务] 请求失败 {url[:80]}: {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # 更新检查
 # ---------------------------------------------------------------------------
 
@@ -257,16 +273,17 @@ def collect_pending_snapshots(limit: int = TELEMETRY_BATCH) -> list[dict]:
     items: list[dict] = []
     with sqlite_connection() as conn:
         rows = conn.execute(
-            "SELECT id, keyword_slug, keyword, price, title, tags_json, snapshot_time"
+            "SELECT id, platform, keyword_slug, keyword, price, title, tags_json, snapshot_time"
             " FROM price_snapshots WHERE id > ? ORDER BY id ASC LIMIT ?",
             (watermark, limit),
         ).fetchall()
         last_id = watermark
         for row in rows:
             last_id = max(last_id, row["id"])
+            platform = str(row["platform"] or "").strip() or _infer_platform(row["keyword_slug"])
             items.append(
                 {
-                    "platform": _infer_platform(row["keyword_slug"]),
+                    "platform": platform,
                     "keyword": str(row["keyword"] or "")[:128],
                     "price": float(row["price"]),
                     "title": str(row["title"] or "")[:80],

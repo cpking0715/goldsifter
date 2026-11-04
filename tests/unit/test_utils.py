@@ -51,4 +51,10 @@ def test_save_to_jsonl(tmp_path, monkeypatch):
             sort_order="asc",
         )
     )
-    assert records == [record]
+    # load_all_result_records 返回带可见性装饰的记录（_status 等），
+    # 比对时剥离装饰字段，只校验业务载荷完整一致
+    def _strip_decorations(rec):
+        return {k: v for k, v in rec.items() if not k.startswith("_")}
+
+    assert [_strip_decorations(r) for r in records] == [record]
+    assert records[0]["_status"] == "active"

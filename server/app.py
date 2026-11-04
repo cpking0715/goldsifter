@@ -296,6 +296,126 @@ async def latest_update(channel: str = Query(default="stable")):
 
 
 # ---------------------------------------------------------------------------
+# 行情聚合（众包快照 → 全平台行情；Phase 3 第一块）
+# ---------------------------------------------------------------------------
+
+def _summarize_rows(rows) -> dict:
+    prices = sorted(float(r["price"]) for r in rows if r["price"] is not None)
+    if not prices:
+        return {"sample_count": 0, "avg_price": None, "median_price": None,
+                "min_price": None, "max_price": None}
+    mid = len(prices) // 2
+    median = prices[mid] if len(prices) % 2 else round((prices[mid - 1] + prices[mid]) / 2, 2)
+    return {
+        "sample_count": len(prices),
+        "avg_price": round(sum(prices) / len(prices), 2),
+        "median_price": round(median, 2),
+        "min_price": min(prices),
+        "max_price": max(prices),
+    }
+
+
+@app.get("/api/v1/market/keywords")
+async def market_keywords(request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    """行情覆盖的关键词列表（按样本量排序）。"""
+    _rate_limit(request, "market", limit=30)
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT platform, keyword, COUNT(*) AS samples,
+                   MAX(captured_at) AS latest_at,
+                   AVG(price) AS avg_price, MIN(price) AS min_price, MAX(price) AS max_price
+            FROM market_snapshots
+            GROUP BY platform, keyword
+            ORDER BY samples DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        {
+            "platform": r["platform"], "keyword": r["keyword"],
+            "samples": r["samples"],
+            "latest_at": r["latest_at"],
+            "avg_price": round(r["avg_price"], 2) if r["avg_price"] is not None else None,
+            "min_price": r["min_price"], "max_price": r["max_price"],
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/v1/market/summary")
+async def market_summary(
+    request: Request,
+    platform: str = Query(default=""),
+    keyword: str = Query(default=""),
+):
+    """单个关键词的行情详情：最新样本概览 + 近 30 天日趋势。"""
+    _rate_limit(request, "market", limit=30)
+    if not keyword:
+        raise HTTPException(status_code=400, detail="keyword 必填")
+    conditions = ["keyword = ?"]
+    params: list = [keyword]
+    if platform:
+        conditions.append("platform = ?")
+        params.append(platform)
+
+    with db() as conn:
+        latest_rows = conn.execute(
+            f"""
+            SELECT price FROM market_snapshots
+            WHERE {' AND '.join(conditions)}
+              AND substr(captured_at, 1, 10) = (
+                SELECT MAX(substr(captured_at, 1, 10)) FROM market_snapshots
+                WHERE {' AND '.join(conditions)}
+              )
+            """,
+            params + params,
+        ).fetchall()
+        latest_summary = _summarize_rows(latest_rows)
+
+        trend_rows = conn.execute(
+            f"""
+            SELECT substr(captured_at, 1, 10) AS day, price FROM market_snapshots
+            WHERE {' AND '.join(conditions)} AND captured_at >= datetime('now', '-30 day')
+            ORDER BY captured_at ASC
+            """,
+            params,
+        ).fetchall()
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c, MAX(captured_at) AS latest_at FROM market_snapshots WHERE {' AND '.join(conditions)}",
+            params,
+        ).fetchone()
+
+    # 日趋势：按天聚合（样本数/均价/最低/最高）
+    from collections import defaultdict
+
+    by_day: dict[str, list[float]] = defaultdict(list)
+    for r in trend_rows:
+        try:
+            by_day[r["day"]].append(float(r["price"]))
+        except (TypeError, ValueError):
+            continue
+    daily = []
+    for day in sorted(by_day.keys()):
+        vals = by_day[day]
+        daily.append({
+            "day": day, "sample_count": len(vals),
+            "avg_price": round(sum(vals) / len(vals), 2),
+            "min_price": min(vals), "max_price": max(vals),
+        })
+
+    return {
+        "platform": platform or None,
+        "keyword": keyword,
+        "latest": latest_summary,
+        "daily_trend": daily,
+        "total_samples": total["c"],
+        "latest_snapshot_at": total["latest_at"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # 行情快照回传
 # ---------------------------------------------------------------------------
 
