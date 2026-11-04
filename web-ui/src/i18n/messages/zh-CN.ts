@@ -6,7 +6,7 @@ const zhCN = {
   },
   platforms: {
     youpin: '悠悠有品（游戏饰品）',
-    ebay: 'eBay（海外捡漏）',
+    ebay: 'eBay（需海外网络）',
     xianyu: '闲鱼',
     kongfz: '孔夫子旧书网',
   },

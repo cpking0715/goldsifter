@@ -59,7 +59,7 @@ _PLATFORMS: dict[str, PlatformInfo] = {
     ),
     PLATFORM_EBAY: PlatformInfo(
         platform_id=PLATFORM_EBAY,
-        display_name="eBay（海外·Pro）",
+        display_name="eBay（需海外网络·Pro）",
         capabilities=PlatformCapabilities(
             price_range=True,
         ),

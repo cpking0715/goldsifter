@@ -6,7 +6,7 @@ const enUS = {
   },
   platforms: {
     youpin: 'YouPin898 (game skins)',
-    ebay: 'eBay (overseas)',
+    ebay: 'eBay (requires overseas network)',
     xianyu: 'Xianyu',
     kongfz: 'Kongfz',
   },
