@@ -235,8 +235,11 @@ export function useResults() {
         totalItems.value = 0
       }
     } finally {
-      isLoading.value = false
-      isLoadingMore.value = false
+      // 仅最新请求有权收尾 loading；过期请求提前结束不得清掉新请求的加载态
+      if (seq === fetchSeqCounter) {
+        isLoading.value = false
+        isLoadingMore.value = false
+      }
     }
   }
 

@@ -182,3 +182,11 @@ findings #1/#3 为前端逻辑（无前端测试基建），以 vue-tsc 类型�
 
 修复验证：`npm run build` → 退出码 0（本轮全部为前端改动，pytest 无涉；后端未动）。
 
+第四轮复审（2026-11-04，对 3b23cb5）：R3 四条确认落地，另出 1 条 loading 收尾残留：
+
+| # | 来源 | 严重度 | 问题 | 状态 |
+|---|------|--------|------|------|
+| R4-1 | Cursor major | finally 无条件清 loading，过期请求提前结束会放行新请求的加载态，loadMore 可对错误 page 发 append | **fixed**：finally 仅在 seq 为最新时收尾 loading |
+
+修复验证：`npm run build` → 退出码 0。
+
