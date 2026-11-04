@@ -695,6 +695,59 @@ def test_results_value_score_sort_and_pagination(tmp_path, monkeypatch):
     assert [item["商品信息"]["商品ID"] for item in data["items"]] == ["3002", "3001"]
 
 
+def test_results_hidden_category_respects_search_price_and_time_filters(tmp_path, monkeypatch):
+    """已屏蔽分类同样要应用搜索/价格/时间过滤（回归：hidden 分支曾跳过这些条件）。"""
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    # 隐藏 3001（iPhone 17 Pro，¥5000）与 3002（iPhone 17 普通版，¥3000）
+    for item_id in ("3001", "3002"):
+        resp = client.patch(
+            "/api/results/demo_full_data.jsonl/items/" + item_id + "/status",
+            json={"status": "hidden"},
+        )
+        assert resp.status_code == 200
+
+    # 搜索在已屏蔽分类内生效
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"category": "hidden", "search": "Pro"},
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3001"]
+
+    # 价格区间在已屏蔽分类内生效
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"category": "hidden", "max_price": 3500},
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3002"]
+
+    # 发现时间在已屏蔽分类内生效（3001 早于 3002）
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl",
+        params={"category": "hidden", "found_since": "2026-01-05T10:30:00"},
+    )
+    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3002"]
+
+
+def test_results_export_rejects_invalid_price_range(tmp_path, monkeypatch):
+    """export 与列表接口一致校验价格区间（回归：曾静默导出空 CSV）。"""
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
+    client = _make_results_client()
+
+    resp = client.get(
+        "/api/results/demo_full_data.jsonl/export",
+        params={"min_price": 5000, "max_price": 1000},
+    )
+    assert resp.status_code == 400
+
+
 def test_results_export_with_new_filters(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"

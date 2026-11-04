@@ -149,5 +149,15 @@ base=e30528e  head=<本次提交（见 git log -1）>
 
 ## findings 台账（本轮）
 
-（审阅结果由 reviewer 回填）
+Cursor 审阅（2026-11-04，对 671bb80）：
+
+| # | 来源 | 严重度 | 问题 | 状态 |
+|---|------|--------|------|------|
+| 1 | Cursor blocker | 「自上次查看」用已前移的 watermark 做 found_since，选中即清空列表 | **fixed**：改用 prevVisit 基线（上一次见到新数据前的水位）；首访 prevVisit=null 时筛选不生效（show all），不再首访即空 |
+| 2 | Cursor major | category=hidden 分支 continue 过早，跳过搜索/价格/时间过滤 | **fixed**：hidden 分支只做可见性反转，其余条件统一 fall-through；补 3 条回归测试 |
+| 3 | Cursor major | toggleItemFavorite 连点响应乱序致状态不一致 | **fixed**：per-item 在途 Set 串行化，在途时忽略重复点击 |
+| 4 | Cursor minor | export 缺 min_price>max_price 校验，静默导出空 CSV | **fixed**：与列表接口同样返回 400；补回归测试 |
+
+修复验证：`pytest tests/integration/test_api_results.py` → **11 passed**；`npm run build` → 退出码 0。
+findings #1/#3 为前端逻辑（无前端测试基建），以 vue-tsc 类型检查 + 构建 + 代码走读验证。
 

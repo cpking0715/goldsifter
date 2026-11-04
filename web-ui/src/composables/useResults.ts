@@ -141,8 +141,8 @@ export function useResults() {
       if (!Number.isNaN(max)) params.max_price = max
     }
     if (filters.foundWithin === 'last_visit') {
-      // watermark 即「上次查看」时见到的最新时间
-      if (newSinceWatermark.value) params.found_since = newSinceWatermark.value
+      // prevVisit = 上一次看到新数据前的水位（首次访问为 null，筛选不生效）
+      if (prevVisit.value) params.found_since = prevVisit.value
     } else if (filters.foundWithin > 0) {
       params.found_since = toLocalIso(new Date(Date.now() - filters.foundWithin * 86400000))
     }
@@ -161,10 +161,9 @@ export function useResults() {
     if (!newest) return
     const stored = localStorage.getItem(newSinceStorageKey(file))
     if (!stored) {
-      // 首次访问：全部视为已见，不标新
+      // 首次访问：记录水位，不设角标基线（prevVisit 保持 null）
       localStorage.setItem(newSinceStorageKey(file), newest)
       newSinceWatermark.value = newest
-      prevVisit.value = newest
     } else if (newest > stored) {
       prevVisit.value = stored
       localStorage.setItem(newSinceStorageKey(file), newest)
@@ -372,10 +371,15 @@ export function useResults() {
     }
   }
 
+  const favoritePending = new Set<string>()
+
   async function toggleItemFavorite(item: ResultItem) {
     const file = selectedFile.value
     const itemId = item.商品信息?.商品ID
     if (!file || !itemId) return
+    // 同一商品的收藏请求串行化：在途时忽略后续点击，避免响应乱序
+    if (favoritePending.has(itemId)) return
+    favoritePending.add(itemId)
     const next = item._is_favorite !== true
     const previous = item._is_favorite === true
     item._is_favorite = next // 乐观更新，失败回滚
@@ -385,6 +389,8 @@ export function useResults() {
     } catch (e) {
       item._is_favorite = previous
       if (e instanceof Error) error.value = e
+    } finally {
+      favoritePending.delete(itemId)
     }
   }
 

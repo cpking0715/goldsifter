@@ -1,0 +1,1966 @@
+diff --git a/src/api/routes/results.py b/src/api/routes/results.py
+index 741fa9f..e8d8e05 100644
+--- a/src/api/routes/results.py
++++ b/src/api/routes/results.py
+@@ -21,10 +21,12 @@ from src.services.result_storage_service import (
+     list_result_filenames,
+     load_all_result_records,
+     load_result_blacklist_keywords,
++    load_result_category_counts,
+     load_visible_result_item_ids,
+     query_result_records,
+     result_file_exists,
+     save_result_blacklist_keywords,
++    update_item_favorite,
+     update_item_status,
+ )
+ 
+@@ -34,6 +36,30 @@ router = APIRouter(prefix="/api/results", tags=["results"])
+ DEFAULT_EXPORT_FILENAME = "export.csv"
+ 
+ 
++class ResultCategory(str, Enum):
++    ALL = "all"
++    AI_RECOMMENDED = "ai_recommended"
++    HIGH_VALUE = "high_value"
++    KEYWORD_HIT = "keyword_hit"
++    FAVORITE = "favorite"
++    HIDDEN = "hidden"
++
++
++def _normalize_category(
++    category: ResultCategory | None,
++    ai_recommended_only: bool,
++    keyword_recommended_only: bool,
++) -> ResultCategory | None:
++    """显式 category 优先；否则兼容旧的推荐筛选布尔参数。"""
++    if category is not None and category != ResultCategory.ALL:
++        return category
++    if ai_recommended_only:
++        return ResultCategory.AI_RECOMMENDED
++    if keyword_recommended_only:
++        return ResultCategory.KEYWORD_HIT
++    return category
++
++
+ def _build_download_headers(export_name: str) -> dict[str, str]:
+     ascii_name = export_name.encode("ascii", "ignore").decode("ascii")
+     if ascii_name != export_name or not ascii_name:
+@@ -89,19 +115,30 @@ async def get_result_file_content(
+     ai_recommended_only: bool = Query(False),
+     keyword_recommended_only: bool = Query(False),
+     include_hidden: bool = Query(False),
++    category: ResultCategory | None = Query(None),
++    search: str | None = Query(None, max_length=100),
++    min_price: float | None = Query(None, ge=0),
++    max_price: float | None = Query(None, ge=0),
++    found_since: str | None = Query(None, max_length=40),
+     sort_by: str = Query("crawl_time"),
+     sort_order: str = Query("desc"),
+ ):
+-    """读取指定的 .jsonl 文件内容，支持分页、筛选和排序"""
++    """读取指定的 .jsonl 文件内容，支持分页、分类、筛选和排序"""
+     if ai_recommended_only and keyword_recommended_only:
+         raise HTTPException(status_code=400, detail="AI推荐筛选与关键词推荐筛选不能同时开启。")
+ 
+     if recommended_only and not ai_recommended_only and not keyword_recommended_only:
+         ai_recommended_only = True
+ 
++    effective_category = _normalize_category(
++        category, ai_recommended_only, keyword_recommended_only
++    )
++    if min_price is not None and max_price is not None and min_price > max_price:
++        raise HTTPException(status_code=400, detail="最低价不能高于最高价。")
++
+     try:
+         validate_result_filename(filename)
+-        total_items, items = await query_result_records(
++        total_items, items, counts = await query_result_records(
+             filename,
+             ai_recommended_only=ai_recommended_only,
+             keyword_recommended_only=keyword_recommended_only,
+@@ -110,6 +147,11 @@ async def get_result_file_content(
+             page=page,
+             limit=limit,
+             include_hidden=include_hidden,
++            search=search,
++            min_price=min_price,
++            max_price=max_price,
++            found_since=found_since,
++            category=effective_category.value if effective_category else None,
+         )
+     except ValueError as exc:
+         raise HTTPException(status_code=400, detail=str(exc))
+@@ -123,10 +165,24 @@ async def get_result_file_content(
+         "total_items": total_items,
+         "page": page,
+         "limit": limit,
+-        "items": paginated_results
++        "items": paginated_results,
++        "counts": counts,
+     }
+ 
+ 
++@router.get("/{filename}/counts")
++async def get_result_file_counts(filename: str):
++    """读取结果集各分类数量（用于收藏等局部刷新场景）"""
++    try:
++        validate_result_filename(filename)
++        counts = await load_result_category_counts(filename)
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++    except Exception as exc:
++        raise HTTPException(status_code=500, detail=f"读取分类计数时出错: {exc}")
++    return {"counts": counts}
++
++
+ @router.get("/{filename}/insights")
+ async def get_result_file_insights(filename: str):
+     try:
+@@ -147,6 +203,11 @@ async def export_result_file_content(
+     ai_recommended_only: bool = Query(False),
+     keyword_recommended_only: bool = Query(False),
+     include_hidden: bool = Query(False),
++    category: ResultCategory | None = Query(None),
++    search: str | None = Query(None, max_length=100),
++    min_price: float | None = Query(None, ge=0),
++    max_price: float | None = Query(None, ge=0),
++    found_since: str | None = Query(None, max_length=40),
+     sort_by: str = Query("crawl_time"),
+     sort_order: str = Query("desc"),
+ ):
+@@ -155,6 +216,10 @@ async def export_result_file_content(
+     if recommended_only and not ai_recommended_only and not keyword_recommended_only:
+         ai_recommended_only = True
+ 
++    effective_category = _normalize_category(
++        category, ai_recommended_only, keyword_recommended_only
++    )
++
+     try:
+         validate_result_filename(filename)
+         results = await load_all_result_records(
+@@ -164,6 +229,11 @@ async def export_result_file_content(
+             sort_by=sort_by,
+             sort_order=sort_order,
+             include_hidden=include_hidden,
++            search=search,
++            min_price=min_price,
++            max_price=max_price,
++            found_since=found_since,
++            category=effective_category.value if effective_category else None,
+         )
+         csv_text = build_results_csv(
+             enrich_records_with_price_insight(results, filename)
+@@ -190,6 +260,10 @@ class UpdateStatusRequest(BaseModel):
+     status: ItemStatus
+ 
+ 
++class UpdateFavoriteRequest(BaseModel):
++    favorite: bool
++
++
+ class BlacklistRulesRequest(BaseModel):
+     keywords: list[str]
+ 
+@@ -207,6 +281,19 @@ async def patch_item_status(filename: str, item_id: str, body: UpdateStatusReque
+     return {"message": "状态已更新", "status": body.status.value}
+ 
+ 
++@router.patch("/{filename}/items/{item_id}/favorite")
++async def patch_item_favorite(filename: str, item_id: str, body: UpdateFavoriteRequest):
++    """收藏/取消收藏指定商品"""
++    try:
++        validate_result_filename(filename)
++        updated = await update_item_favorite(filename, item_id, body.favorite)
++        if not updated:
++            raise HTTPException(status_code=404, detail="商品未找到")
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++    return {"message": "收藏状态已更新", "favorite": body.favorite}
++
++
+ @router.get("/{filename}/blacklist-rules")
+ async def get_result_blacklist_rules(filename: str):
+     try:
+diff --git a/src/app.py b/src/app.py
+index 6629b24..6b4496b 100644
+--- a/src/app.py
++++ b/src/app.py
+@@ -35,6 +35,7 @@ from src.services.task_log_cleanup_service import cleanup_task_logs
+ from src.services.task_generation_service import TaskGenerationService
+ from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
+ from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
++from src.infrastructure.persistence.storage_names import build_result_filename
+ from src.infrastructure.config.settings import settings as app_settings
+ 
+ 
+@@ -54,6 +55,15 @@ async def _sync_task_runtime_status(task_id: int, is_running: bool) -> None:
+         "task_status_changed",
+         {"id": task_id, "is_running": is_running},
+     )
++    # 任务进程结束后结果集可能已更新，通知前端刷新结果页
++    if not is_running:
++        await websocket.broadcast_message(
++            "results_updated",
++            {
++                "task_id": task_id,
++                "filename": build_result_filename(task.keyword, task.platform),
++            },
++        )
+ 
+ 
+ process_service.set_lifecycle_hooks(
+diff --git a/src/infrastructure/persistence/sqlite_connection.py b/src/infrastructure/persistence/sqlite_connection.py
+index cf51717..740a6c0 100644
+--- a/src/infrastructure/persistence/sqlite_connection.py
++++ b/src/infrastructure/persistence/sqlite_connection.py
+@@ -144,6 +144,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
+     for statement in SCHEMA_STATEMENTS:
+         conn.execute(statement)
+     _migrate_result_items_status(conn)
++    _migrate_result_items_favorite(conn)
+     _migrate_tasks_platform(conn)
+     conn.commit()
+ 
+@@ -186,6 +187,27 @@ def _migrate_result_items_status(conn: sqlite3.Connection) -> None:
+     )
+ 
+ 
++def _migrate_result_items_favorite(conn: sqlite3.Connection) -> None:
++    """为 result_items 表添加 is_favorite 列（仅执行一次）。"""
++    row = conn.execute(
++        "SELECT value FROM app_metadata WHERE key = 'migration:result_items_favorite'"
++    ).fetchone()
++    if row is not None:
++        return
++    cols = [r[1] for r in conn.execute("PRAGMA table_info(result_items)").fetchall()]
++    if "is_favorite" not in cols:
++        conn.execute(
++            "ALTER TABLE result_items ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0"
++        )
++    conn.execute(
++        "INSERT OR REPLACE INTO app_metadata(key, value) VALUES ('migration:result_items_favorite', 'done')"
++    )
++    conn.execute(
++        "CREATE INDEX IF NOT EXISTS idx_results_filename_favorite_crawl"
++        " ON result_items(result_filename, is_favorite, crawl_time DESC)"
++    )
++
++
+ @contextmanager
+ def sqlite_connection(
+     db_path: str | None = None,
+diff --git a/src/services/result_storage_service.py b/src/services/result_storage_service.py
+index 493290b..684647b 100644
+--- a/src/services/result_storage_service.py
++++ b/src/services/result_storage_service.py
+@@ -25,6 +25,24 @@ SORT_COLUMN_MAP = {
+     "keyword_hit_count": "keyword_hit_count",
+ }
+ 
++# 高性价比分类的 value_score 阈值（AI 输出的 0-100 性价比分）
++HIGH_VALUE_SCORE_THRESHOLD = 60.0
++
++CATEGORY_ALL = "all"
++CATEGORY_AI_RECOMMENDED = "ai_recommended"
++CATEGORY_HIGH_VALUE = "high_value"
++CATEGORY_KEYWORD_HIT = "keyword_hit"
++CATEGORY_FAVORITE = "favorite"
++CATEGORY_HIDDEN = "hidden"
++RESULT_CATEGORIES = (
++    CATEGORY_ALL,
++    CATEGORY_AI_RECOMMENDED,
++    CATEGORY_HIGH_VALUE,
++    CATEGORY_KEYWORD_HIT,
++    CATEGORY_FAVORITE,
++    CATEGORY_HIDDEN,
++)
++
+ 
+ def _get_link_unique_key(link: str) -> str:
+     return link.split("&", 1)[0]
+@@ -40,30 +58,72 @@ def _fallback_unique_key(record: dict, item: dict) -> str:
+     return f"hash:{digest}"
+ 
+ 
+-def _parse_raw_record(raw_json: str, *, status: str | None = None) -> dict:
++def _parse_raw_record(
++    raw_json: str, *, status: str | None = None, is_favorite: bool = False
++) -> dict:
+     record = json.loads(raw_json)
+     if status is not None:
+         record["_status"] = status
++    record["_is_favorite"] = is_favorite
+     return record
+ 
+ 
+-def _build_query_conditions(
+-    *,
+-    filename: str,
+-    ai_recommended_only: bool,
+-    keyword_recommended_only: bool,
+-) -> tuple[str, list]:
+-    conditions = ["result_filename = ?"]
+-    params: list = [filename]
+-    if ai_recommended_only:
+-        conditions.append("is_recommended = 1")
+-        conditions.append("analysis_source = ?")
+-        params.append("ai")
+-    if keyword_recommended_only:
+-        conditions.append("is_recommended = 1")
+-        conditions.append("analysis_source = ?")
+-        params.append("keyword")
+-    return " AND ".join(conditions), params
++def _record_value_score(record: dict) -> float | None:
++    analysis = record.get("ai_analysis") or {}
++    try:
++        return float(analysis.get("value_score"))
++    except (TypeError, ValueError):
++        return None
++
++
++def _is_ai_recommended_record(record: dict) -> bool:
++    analysis = record.get("ai_analysis") or {}
++    return (
++        analysis.get("analysis_source") == "ai"
++        and analysis.get("is_recommended") is True
++    )
++
++
++def _is_keyword_hit_record(record: dict) -> bool:
++    analysis = record.get("ai_analysis") or {}
++    return (
++        analysis.get("analysis_source") == "keyword"
++        and analysis.get("is_recommended") is True
++    )
++
++
++def _is_high_value_record(record: dict) -> bool:
++    score = _record_value_score(record)
++    return score is not None and score >= HIGH_VALUE_SCORE_THRESHOLD
++
++
++def _record_matches_category(record: dict, category: str) -> bool:
++    if category == CATEGORY_AI_RECOMMENDED:
++        return _is_ai_recommended_record(record)
++    if category == CATEGORY_HIGH_VALUE:
++        return _is_high_value_record(record)
++    if category == CATEGORY_KEYWORD_HIT:
++        return _is_keyword_hit_record(record)
++    if category == CATEGORY_FAVORITE:
++        return record.get("_is_favorite") is True
++    if category == CATEGORY_HIDDEN:
++        return not _is_record_visible(record)
++    return True
++
++
++def _record_search_text(record: dict) -> str:
++    item = record.get("商品信息", {}) or {}
++    seller = record.get("卖家信息", {}) or {}
++    parts = [
++        str(item.get("商品标题") or ""),
++        str(seller.get("卖家昵称") or item.get("卖家昵称") or ""),
++    ]
++    return " ".join(part for part in parts if part)
++
++
++def _record_price(record: dict) -> float | None:
++    item = record.get("商品信息", {}) or {}
++    return parse_price_value(item.get("当前售价"))
+ 
+ 
+ def _sort_expression(sort_by: str, sort_order: str) -> str:
+@@ -111,42 +171,141 @@ def _is_record_visible(record: dict) -> bool:
+     return record.get("_effective_hidden") is not True
+ 
+ 
+-def _load_filtered_records_from_conn(
++def _load_decorated_records_from_conn(
+     conn,
+     *,
+     filename: str,
+-    ai_recommended_only: bool,
+-    keyword_recommended_only: bool,
+-    sort_by: str,
+-    sort_order: str,
+-    include_hidden: bool,
++    sort_by: str = "crawl_time",
++    sort_order: str = "desc",
+ ) -> list[dict]:
+-    where_clause, params = _build_query_conditions(
+-        filename=filename,
+-        ai_recommended_only=ai_recommended_only,
+-        keyword_recommended_only=keyword_recommended_only,
+-    )
++    """加载结果集全部记录并完成可见性/收藏装饰（不做任何过滤）。"""
+     order_clause = _sort_expression(sort_by, sort_order)
+     rows = conn.execute(
+         f"""
+-        SELECT raw_json, status
++        SELECT raw_json, status, is_favorite
+         FROM result_items
+-        WHERE {where_clause}
++        WHERE result_filename = ?
+         ORDER BY {order_clause}
+         """,
+-        tuple(params),
++        (filename,),
+     ).fetchall()
+     blacklist_keywords = _load_blacklist_keywords_from_conn(conn, filename)
+ 
+     records: list[dict] = []
+     for row in rows:
+-        record = _parse_raw_record(str(row["raw_json"]), status=row["status"])
+-        decorated = _decorate_record_visibility(record, row["status"], blacklist_keywords)
+-        if include_hidden or _is_record_visible(decorated):
+-            records.append(decorated)
++        record = _parse_raw_record(
++            str(row["raw_json"]),
++            status=row["status"],
++            is_favorite=bool(row["is_favorite"]),
++        )
++        records.append(
++            _decorate_record_visibility(record, row["status"], blacklist_keywords)
++        )
+     return records
+ 
+ 
++def _apply_record_filters(
++    records: list[dict],
++    *,
++    ai_recommended_only: bool = False,
++    keyword_recommended_only: bool = False,
++    include_hidden: bool = False,
++    search: str | None = None,
++    min_price: float | None = None,
++    max_price: float | None = None,
++    found_since: str | None = None,
++    category: str | None = None,
++) -> list[dict]:
++    """在装饰后的记录上应用过滤（分类/搜索/价格/时间/收藏/可见性）。"""
++    search_text = (search or "").strip().lower()
++    effective_category = category or CATEGORY_ALL
++    show_hidden_only = effective_category == CATEGORY_HIDDEN
++
++    filtered: list[dict] = []
++    for record in records:
++        if show_hidden_only:
++            if not _is_record_visible(record):
++                filtered.append(record)
++            continue
++        if not include_hidden and not _is_record_visible(record):
++            continue
++        if not _record_matches_category(record, effective_category):
++            continue
++        if ai_recommended_only and not _is_ai_recommended_record(record):
++            continue
++        if keyword_recommended_only and not _is_keyword_hit_record(record):
++            continue
++        if search_text and search_text not in _record_search_text(record).lower():
++            continue
++        if min_price is not None or max_price is not None:
++            price = _record_price(record)
++            if price is None:
++                continue
++            if min_price is not None and price < min_price:
++                continue
++            if max_price is not None and price > max_price:
++                continue
++        # 爬取时间与 found_since 均为本地 naive ISO 字符串，可直接字典序比较
++        if found_since and not str(record.get("爬取时间") or "") >= found_since:
++            continue
++        filtered.append(record)
++    return filtered
++
++
++def _sort_records_by_value_score(records: list[dict], sort_order: str) -> None:
++    """按 AI 性价比分排序，缺失分数的记录固定排在末尾。"""
++    reverse = sort_order != "asc"
++    scored = [record for record in records if _record_value_score(record) is not None]
++    unscored = [record for record in records if _record_value_score(record) is None]
++    scored.sort(key=_record_value_score, reverse=reverse)
++    records[:] = scored + unscored
++
++
++def _count_result_categories(records: list[dict]) -> dict[str, int]:
++    """统计各分类数量（基于全部记录，不叠加搜索/价格等过滤条件）。"""
++    visible = [record for record in records if _is_record_visible(record)]
++    hidden_count = len(records) - len(visible)
++    return {
++        CATEGORY_ALL: len(visible),
++        CATEGORY_AI_RECOMMENDED: sum(1 for r in visible if _is_ai_recommended_record(r)),
++        CATEGORY_HIGH_VALUE: sum(1 for r in visible if _is_high_value_record(r)),
++        CATEGORY_KEYWORD_HIT: sum(1 for r in visible if _is_keyword_hit_record(r)),
++        CATEGORY_FAVORITE: sum(1 for r in visible if r.get("_is_favorite") is True),
++        CATEGORY_HIDDEN: hidden_count,
++    }
++
++
++def _load_filtered_records_from_conn(
++    conn,
++    *,
++    filename: str,
++    ai_recommended_only: bool = False,
++    keyword_recommended_only: bool = False,
++    sort_by: str = "crawl_time",
++    sort_order: str = "desc",
++    include_hidden: bool = False,
++    search: str | None = None,
++    min_price: float | None = None,
++    max_price: float | None = None,
++    found_since: str | None = None,
++    category: str | None = None,
++) -> list[dict]:
++    records = _load_decorated_records_from_conn(
++        conn, filename=filename, sort_by=sort_by, sort_order=sort_order
++    )
++    return _apply_record_filters(
++        records,
++        ai_recommended_only=ai_recommended_only,
++        keyword_recommended_only=keyword_recommended_only,
++        include_hidden=include_hidden,
++        search=search,
++        min_price=min_price,
++        max_price=max_price,
++        found_since=found_since,
++        category=category,
++    )
++
++
+ async def save_result_record(record: dict, keyword: str, platform: str = "xianyu") -> bool:
+     return await asyncio.to_thread(_save_result_record_sync, record, keyword, platform)
+ 
+@@ -256,14 +415,19 @@ def _delete_result_file_records_sync(filename: str) -> int:
+ async def query_result_records(
+     filename: str,
+     *,
+-    ai_recommended_only: bool,
+-    keyword_recommended_only: bool,
+-    sort_by: str,
+-    sort_order: str,
+-    page: int,
+-    limit: int,
++    ai_recommended_only: bool = False,
++    keyword_recommended_only: bool = False,
++    sort_by: str = "crawl_time",
++    sort_order: str = "desc",
++    page: int = 1,
++    limit: int = 20,
+     include_hidden: bool = False,
+-) -> tuple[int, list[dict]]:
++    search: str | None = None,
++    min_price: float | None = None,
++    max_price: float | None = None,
++    found_since: str | None = None,
++    category: str | None = None,
++) -> tuple[int, list[dict], dict[str, int]]:
+     return await asyncio.to_thread(
+         _query_result_records_sync,
+         filename,
+@@ -274,6 +438,11 @@ async def query_result_records(
+         page,
+         limit,
+         include_hidden,
++        search,
++        min_price,
++        max_price,
++        found_since,
++        category,
+     )
+ 
+ 
+@@ -286,31 +455,60 @@ def _query_result_records_sync(
+     page: int,
+     limit: int,
+     include_hidden: bool,
+-) -> tuple[int, list[dict]]:
++    search: str | None,
++    min_price: float | None,
++    max_price: float | None,
++    found_since: str | None,
++    category: str | None,
++) -> tuple[int, list[dict], dict[str, int]]:
+     bootstrap_sqlite_storage()
+     offset = max(page - 1, 0) * limit
+     with sqlite_connection() as conn:
+-        records = _load_filtered_records_from_conn(
+-            conn,
+-            filename=filename,
+-            ai_recommended_only=ai_recommended_only,
+-            keyword_recommended_only=keyword_recommended_only,
+-            sort_by=sort_by,
+-            sort_order=sort_order,
+-            include_hidden=include_hidden,
++        all_records = _load_decorated_records_from_conn(
++            conn, filename=filename, sort_by=sort_by, sort_order=sort_order
+         )
++    counts = _count_result_categories(all_records)
++    records = _apply_record_filters(
++        all_records,
++        ai_recommended_only=ai_recommended_only,
++        keyword_recommended_only=keyword_recommended_only,
++        include_hidden=include_hidden,
++        search=search,
++        min_price=min_price,
++        max_price=max_price,
++        found_since=found_since,
++        category=category,
++    )
++    if sort_by == "value_score":
++        _sort_records_by_value_score(records, sort_order)
+     total = len(records)
+-    return total, records[offset: offset + limit]
++    return total, records[offset: offset + limit], counts
++
++
++async def load_result_category_counts(filename: str) -> dict[str, int]:
++    return await asyncio.to_thread(_load_result_category_counts_sync, filename)
++
++
++def _load_result_category_counts_sync(filename: str) -> dict[str, int]:
++    bootstrap_sqlite_storage()
++    with sqlite_connection() as conn:
++        records = _load_decorated_records_from_conn(conn, filename=filename)
++    return _count_result_categories(records)
+ 
+ 
+ async def load_all_result_records(
+     filename: str,
+     *,
+-    ai_recommended_only: bool,
+-    keyword_recommended_only: bool,
+-    sort_by: str,
+-    sort_order: str,
++    ai_recommended_only: bool = False,
++    keyword_recommended_only: bool = False,
++    sort_by: str = "crawl_time",
++    sort_order: str = "desc",
+     include_hidden: bool = False,
++    search: str | None = None,
++    min_price: float | None = None,
++    max_price: float | None = None,
++    found_since: str | None = None,
++    category: str | None = None,
+ ) -> list[dict]:
+     return await asyncio.to_thread(
+         _load_all_result_records_sync,
+@@ -320,6 +518,11 @@ async def load_all_result_records(
+         sort_by,
+         sort_order,
+         include_hidden,
++        search,
++        min_price,
++        max_price,
++        found_since,
++        category,
+     )
+ 
+ 
+@@ -330,10 +533,15 @@ def _load_all_result_records_sync(
+     sort_by: str,
+     sort_order: str,
+     include_hidden: bool,
++    search: str | None,
++    min_price: float | None,
++    max_price: float | None,
++    found_since: str | None,
++    category: str | None,
+ ) -> list[dict]:
+     bootstrap_sqlite_storage()
+     with sqlite_connection() as conn:
+-        return _load_filtered_records_from_conn(
++        records = _load_filtered_records_from_conn(
+             conn,
+             filename=filename,
+             ai_recommended_only=ai_recommended_only,
+@@ -341,7 +549,15 @@ def _load_all_result_records_sync(
+             sort_by=sort_by,
+             sort_order=sort_order,
+             include_hidden=include_hidden,
++            search=search,
++            min_price=min_price,
++            max_price=max_price,
++            found_since=found_since,
++            category=category,
+         )
++    if sort_by == "value_score":
++        _sort_records_by_value_score(records, sort_order)
++    return records
+ 
+ 
+ async def build_result_ndjson(filename: str) -> str:
+@@ -402,6 +618,23 @@ def _load_result_summary_sync(filename: str) -> dict | None:
+     }
+ 
+ 
++async def update_item_favorite(filename: str, item_id: str, favorite: bool) -> bool:
++    return await asyncio.to_thread(
++        _update_item_favorite_sync, filename, item_id, favorite
++    )
++
++
++def _update_item_favorite_sync(filename: str, item_id: str, favorite: bool) -> bool:
++    bootstrap_sqlite_storage()
++    with sqlite_connection() as conn:
++        cursor = conn.execute(
++            "UPDATE result_items SET is_favorite = ? WHERE result_filename = ? AND item_id = ?",
++            (1 if favorite else 0, filename, item_id),
++        )
++        conn.commit()
++        return cursor.rowcount > 0
++
++
+ async def update_item_status(filename: str, item_id: str, status: str) -> bool:
+     valid = {"active", "hidden", "expired"}
+     if status not in valid:
+diff --git a/tests/integration/test_api_results.py b/tests/integration/test_api_results.py
+index 8d68f04..1280632 100644
+--- a/tests/integration/test_api_results.py
++++ b/tests/integration/test_api_results.py
+@@ -414,3 +414,306 @@ def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, mon
+     assert download_resp.status_code == 200
+     assert "MacBook Air Intel i5 8+256" in download_resp.text
+     assert "MacBook Pro Intel 13寸" in download_resp.text
++
++
++def _build_category_fixture(path):
++    """构造覆盖各分类的测试数据：AI推荐/高性价比/关键词命中/普通/低价。"""
++    records = [
++        {
++            "爬取时间": "2026-01-05T10:00:00",
++            "搜索关键字": "demo",
++            "任务名称": "Demo 任务",
++            "商品信息": {
++                "商品ID": "3001",
++                "商品标题": "iPhone 17 Pro 全新未拆封",
++                "商品链接": "https://www.goofish.com/item?id=3001",
++                "当前售价": "¥5000",
++                "发布时间": "2026-01-05 09:00",
++            },
++            "卖家信息": {"卖家昵称": "卖家甲"},
++            "ai_analysis": {
++                "analysis_source": "ai",
++                "is_recommended": True,
++                "reason": "价格与成色俱佳",
++                "value_score": 85,
++            },
++        },
++        {
++            "爬取时间": "2026-01-05T11:00:00",
++            "搜索关键字": "demo",
++            "任务名称": "Demo 任务",
++            "商品信息": {
++                "商品ID": "3002",
++                "商品标题": "iPhone 17 普通版",
++                "商品链接": "https://www.goofish.com/item?id=3002",
++                "当前售价": "¥3000",
++                "发布时间": "2026-01-05 10:00",
++            },
++            "卖家信息": {"卖家昵称": "卖家乙"},
++            "ai_analysis": {
++                "analysis_source": "ai",
++                "is_recommended": False,
++                "reason": "成色存疑",
++                "value_score": 40,
++            },
++        },
++        {
++            "爬取时间": "2026-01-05T12:00:00",
++            "搜索关键字": "demo",
++            "任务名称": "Demo 任务",
++            "商品信息": {
++                "商品ID": "3003",
++                "商品标题": "iPhone 17 Pro Max 关键词命中",
++                "商品链接": "https://www.goofish.com/item?id=3003",
++                "当前售价": "¥6500",
++                "发布时间": "2026-01-05 11:00",
++            },
++            "卖家信息": {"卖家昵称": "卖家丙"},
++            "ai_analysis": {
++                "analysis_source": "keyword",
++                "is_recommended": True,
++                "keyword_hit_count": 2,
++                "reason": "命中 2 个关键词",
++            },
++        },
++        {
++            "爬取时间": "2026-01-05T13:00:00",
++            "搜索关键字": "demo",
++            "任务名称": "Demo 任务",
++            "商品信息": {
++                "商品ID": "3004",
++                "商品标题": "安卓备用机",
++                "商品链接": "https://www.goofish.com/item?id=3004",
++                "当前售价": "¥800",
++                "发布时间": "2026-01-05 12:00",
++            },
++            "卖家信息": {"卖家昵称": "卖家丁"},
++            "ai_analysis": {
++                "analysis_source": "ai",
++                "is_recommended": False,
++                "reason": "与目标不符",
++                "value_score": 30,
++            },
++        },
++    ]
++    _write_jsonl(path, records)
++
++
++def _make_results_client():
++    app = FastAPI()
++    app.include_router(results.router)
++    return TestClient(app)
++
++
++def test_results_category_counts_and_filters(tmp_path, monkeypatch):
++    monkeypatch.chdir(tmp_path)
++    jsonl_dir = tmp_path / "jsonl"
++    jsonl_dir.mkdir(parents=True, exist_ok=True)
++    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
++    client = _make_results_client()
++
++    resp = client.get("/api/results/demo_full_data.jsonl")
++    assert resp.status_code == 200
++    data = resp.json()
++    assert data["total_items"] == 4
++    assert data["counts"] == {
++        "all": 4,
++        "ai_recommended": 1,
++        "high_value": 1,
++        "keyword_hit": 1,
++        "favorite": 0,
++        "hidden": 0,
++    }
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"category": "ai_recommended"}
++    )
++    assert resp.status_code == 200
++    data = resp.json()
++    assert data["total_items"] == 1
++    assert data["items"][0]["商品信息"]["商品ID"] == "3001"
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"category": "high_value"}
++    )
++    assert resp.status_code == 200
++    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3001"]
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"category": "keyword_hit"}
++    )
++    assert resp.status_code == 200
++    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3003"]
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"category": "invalid_cat"}
++    )
++    assert resp.status_code == 422
++
++    # 旧布尔参数应映射到对应分类
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"ai_recommended_only": True}
++    )
++    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3001"]
++
++
++def test_results_search_price_and_found_since_filters(tmp_path, monkeypatch):
++    monkeypatch.chdir(tmp_path)
++    jsonl_dir = tmp_path / "jsonl"
++    jsonl_dir.mkdir(parents=True, exist_ok=True)
++    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
++    client = _make_results_client()
++
++    # 标题搜索
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"search": "pro max"}
++    )
++    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3003"]
++
++    # 卖家搜索
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"search": "卖家乙"}
++    )
++    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3002"]
++
++    # 价格区间
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"min_price": 4000}
++    )
++    assert sorted(item["商品信息"]["商品ID"] for item in resp.json()["items"]) == ["3001", "3003"]
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"max_price": 1000}
++    )
++    assert [item["商品信息"]["商品ID"] for item in resp.json()["items"]] == ["3004"]
++
++    # 非法区间
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl",
++        params={"min_price": 5000, "max_price": 1000},
++    )
++    assert resp.status_code == 400
++
++    # 发现时间（本地 naive ISO 字符串比较）
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl",
++        params={"found_since": "2026-01-05T11:30:00"},
++    )
++    assert sorted(item["商品信息"]["商品ID"] for item in resp.json()["items"]) == ["3003", "3004"]
++
++
++def test_results_favorite_and_hidden_category(tmp_path, monkeypatch):
++    monkeypatch.chdir(tmp_path)
++    jsonl_dir = tmp_path / "jsonl"
++    jsonl_dir.mkdir(parents=True, exist_ok=True)
++    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
++    client = _make_results_client()
++
++    # 收藏 3004
++    resp = client.patch(
++        "/api/results/demo_full_data.jsonl/items/3004/favorite",
++        json={"favorite": True},
++    )
++    assert resp.status_code == 200
++    assert resp.json()["favorite"] is True
++
++    resp = client.get("/api/results/demo_full_data.jsonl/counts")
++    assert resp.status_code == 200
++    assert resp.json()["counts"]["favorite"] == 1
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"category": "favorite"}
++    )
++    data = resp.json()
++    assert data["total_items"] == 1
++    assert data["items"][0]["_is_favorite"] is True
++    assert data["items"][0]["商品信息"]["商品ID"] == "3004"
++
++    # 收藏不存在的商品
++    resp = client.patch(
++        "/api/results/demo_full_data.jsonl/items/9999/favorite",
++        json={"favorite": True},
++    )
++    assert resp.status_code == 404
++
++    # 隐藏 3002 后，已屏蔽分类只展示它，且各分类计数联动
++    resp = client.patch(
++        "/api/results/demo_full_data.jsonl/items/3002/status",
++        json={"status": "hidden"},
++    )
++    assert resp.status_code == 200
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"category": "hidden"}
++    )
++    data = resp.json()
++    assert data["total_items"] == 1
++    assert data["items"][0]["商品信息"]["商品ID"] == "3002"
++    assert data["items"][0]["_hidden_reason"] == "manual"
++
++    resp = client.get("/api/results/demo_full_data.jsonl/counts")
++    counts = resp.json()["counts"]
++    assert counts["all"] == 3
++    assert counts["hidden"] == 1
++    assert counts["favorite"] == 1
++
++
++def test_results_value_score_sort_and_pagination(tmp_path, monkeypatch):
++    monkeypatch.chdir(tmp_path)
++    jsonl_dir = tmp_path / "jsonl"
++    jsonl_dir.mkdir(parents=True, exist_ok=True)
++    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
++    client = _make_results_client()
++
++    # 性价比排序：有分按分数排，无分（3003）固定在末尾
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl",
++        params={"sort_by": "value_score", "sort_order": "desc"},
++    )
++    ids = [item["商品信息"]["商品ID"] for item in resp.json()["items"]]
++    assert ids == ["3001", "3002", "3004", "3003"]
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl",
++        params={"sort_by": "value_score", "sort_order": "asc"},
++    )
++    ids = [item["商品信息"]["商品ID"] for item in resp.json()["items"]]
++    assert ids == ["3004", "3002", "3001", "3003"]
++
++    # 分页：total 恒定，翻页取剩余
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"page": 1, "limit": 2}
++    )
++    data = resp.json()
++    assert data["total_items"] == 4
++    assert len(data["items"]) == 2
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl", params={"page": 2, "limit": 2}
++    )
++    data = resp.json()
++    assert data["total_items"] == 4
++    assert [item["商品信息"]["商品ID"] for item in data["items"]] == ["3002", "3001"]
++
++
++def test_results_export_with_new_filters(tmp_path, monkeypatch):
++    monkeypatch.chdir(tmp_path)
++    jsonl_dir = tmp_path / "jsonl"
++    jsonl_dir.mkdir(parents=True, exist_ok=True)
++    _build_category_fixture(jsonl_dir / "demo_full_data.jsonl")
++    client = _make_results_client()
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl/export",
++        params={"category": "high_value"},
++    )
++    assert resp.status_code == 200
++    assert "iPhone 17 Pro 全新未拆封" in resp.text
++    assert "安卓备用机" not in resp.text
++
++    resp = client.get(
++        "/api/results/demo_full_data.jsonl/export",
++        params={"max_price": 1000},
++    )
++    assert resp.status_code == 200
++    assert "安卓备用机" in resp.text
++    assert "iPhone 17 普通版" not in resp.text
+diff --git a/tests/unit/test_tasks_platform.py b/tests/unit/test_tasks_platform.py
+index c839e8b..3023de3 100644
+--- a/tests/unit/test_tasks_platform.py
++++ b/tests/unit/test_tasks_platform.py
+@@ -84,6 +84,42 @@ def test_legacy_tasks_table_gains_xianyu_platform(tmp_path):
+     assert stored == "xianyu"
+ 
+ 
++def test_legacy_result_items_gain_favorite_column_idempotently(tmp_path):
++    from src.infrastructure.persistence.sqlite_connection import (
++        _migrate_result_items_favorite,
++    )
++
++    conn = sqlite3.connect(tmp_path / "legacy.sqlite3")
++    conn.execute("CREATE TABLE app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
++    conn.execute(
++        """
++        CREATE TABLE result_items (
++            id INTEGER PRIMARY KEY AUTOINCREMENT,
++            result_filename TEXT NOT NULL,
++            link_unique_key TEXT NOT NULL,
++            crawl_time TEXT NOT NULL,
++            status TEXT NOT NULL DEFAULT 'active',
++            raw_json TEXT NOT NULL
++        )
++        """
++    )
++    _migrate_result_items_favorite(conn)
++    conn.commit()
++    cols = [row[1] for row in conn.execute("PRAGMA table_info(result_items)")]
++    assert "is_favorite" in cols
++    indexes = {
++        row[1]
++        for row in conn.execute("PRAGMA index_list(result_items)")
++    }
++    assert "idx_results_filename_favorite_crawl" in indexes
++
++    # 重复执行不报错也不重复加列
++    _migrate_result_items_favorite(conn)
++    conn.commit()
++    cols_again = [row[1] for row in conn.execute("PRAGMA table_info(result_items)")]
++    assert cols_again.count("is_favorite") == 1
++
++
+ def test_platform_roundtrip(tmp_path):
+     repo = SqliteTaskRepository(db_path=str(tmp_path / "app.sqlite3"), legacy_config_file=None)
+     saved = asyncio.run(repo.save(_task(platform="kongfz")))
+diff --git a/web-ui/src/api/results.ts b/web-ui/src/api/results.ts
+index 72bcb3d..c48e2bc 100644
+--- a/web-ui/src/api/results.ts
++++ b/web-ui/src/api/results.ts
+@@ -1,13 +1,23 @@
+-import type { ResultInsights, ResultItem } from '@/types/result.d.ts'
++import type { ResultCategoryCounts, ResultInsights, ResultItem } from '@/types/result.d.ts'
+ import { getAuthToken, useAuth } from '@/composables/useAuth'
+ import { http } from '@/lib/http'
+ 
++export type ResultCategory =
++  | 'all'
++  | 'ai_recommended'
++  | 'high_value'
++  | 'keyword_hit'
++  | 'favorite'
++  | 'hidden'
++
+ export interface GetResultContentParams {
+-  recommended_only?: boolean;
+-  ai_recommended_only?: boolean;
+-  keyword_recommended_only?: boolean;
++  category?: ResultCategory;
++  search?: string;
++  min_price?: number | null;
++  max_price?: number | null;
++  found_since?: string | null;
+   include_hidden?: boolean;
+-  sort_by?: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count';
++  sort_by?: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count' | 'value_score';
+   sort_order?: 'asc' | 'desc';
+   page?: number;
+   limit?: number;
+@@ -25,10 +35,15 @@ export async function deleteResultFile(filename: string): Promise<{ message: str
+ export async function getResultContent(
+   filename: string,
+   params: GetResultContentParams = {}
+-): Promise<{ total_items: number; items: ResultItem[] }> {
++): Promise<{ total_items: number; items: ResultItem[]; counts?: ResultCategoryCounts }> {
+   return await http(`/api/results/${filename}`, { params: params as Record<string, any> })
+ }
+ 
++export async function getResultCounts(filename: string): Promise<ResultCategoryCounts> {
++  const data = await http(`/api/results/${filename}/counts`)
++  return data.counts
++}
++
+ export async function getResultInsights(filename: string): Promise<ResultInsights> {
+   return await http(`/api/results/${filename}/insights`)
+ }
+@@ -87,3 +102,11 @@ export async function updateItemStatus(filename: string, itemId: string, status:
+     body: JSON.stringify({ status }),
+   })
+ }
++
++export async function updateItemFavorite(filename: string, itemId: string, favorite: boolean): Promise<{ message: string; favorite: boolean }> {
++  return await http(`/api/results/${filename}/items/${itemId}/favorite`, {
++    method: 'PATCH',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ favorite }),
++  })
++}
+diff --git a/web-ui/src/components/results/ResultCard.vue b/web-ui/src/components/results/ResultCard.vue
+index 0fbb7c0..4d59bf3 100644
+--- a/web-ui/src/components/results/ResultCard.vue
++++ b/web-ui/src/components/results/ResultCard.vue
+@@ -10,17 +10,20 @@ import {
+   CardTitle,
+ } from '@/components/ui/card'
+ import Badge from '@/components/ui/badge/Badge.vue'
+-import { ExternalLink, TrendingUp, TrendingDown, Info, User, Clock, CheckCircle2, XCircle, AlertCircle, EyeOff, Eye } from 'lucide-vue-next'
++import { ExternalLink, TrendingUp, TrendingDown, Info, User, Clock, CheckCircle2, XCircle, AlertCircle, EyeOff, Eye, Star } from 'lucide-vue-next'
+ import { formatDateTime } from '@/i18n'
+ import { platformLabel } from '@/lib/platform'
+ 
+ interface Props {
+   item: ResultItem
++  /** 「新商品」判定基线：爬取时间晚于该值的商品显示新角标 */
++  newSince?: string | null
+ }
+ 
+ const props = defineProps<Props>()
+ const emit = defineEmits<{
+   (e: 'toggle-block', item: ResultItem): void
++  (e: 'toggle-favorite', item: ResultItem): void
+ }>()
+ const { t } = useI18n()
+ 
+@@ -51,6 +54,14 @@ const hiddenLabel = computed(() => {
+ })
+ 
+ const expanded = ref(false)
++const isFavorite = computed(() => props.item._is_favorite === true)
++const isNew = computed(() => {
++  if (!props.newSince || !props.item.爬取时间) return false
++  return props.item.爬取时间 > props.newSince
++})
++const productTags = computed(() =>
++  (info.商品标签 || []).filter(Boolean).slice(0, 3)
++)
+ </script>
+ 
+ <template>
+@@ -77,11 +88,23 @@ const expanded = ref(false)
+         <Badge v-if="isRecommended && !isHidden" variant="default" class="bg-emerald-500/90 backdrop-blur-md border-none shadow-sm">
+           {{ t('results.card.curated') }}
+         </Badge>
++        <Badge v-if="isNew && !isHidden" variant="default" class="bg-sky-500/90 backdrop-blur-md border-none shadow-sm">
++          {{ t('results.card.newBadge') }}
++        </Badge>
+         <Badge v-if="isRuleHidden" variant="secondary" class="bg-slate-900/75 text-white border-none backdrop-blur-md shadow-sm">
+           {{ t('results.card.blacklisted') }}
+         </Badge>
+       </div>
+       <div class="absolute top-3 right-3 flex gap-1.5">
++        <button
++          type="button"
++          @click="emit('toggle-favorite', props.item)"
++          :aria-label="isFavorite ? t('results.card.unfavorite') : t('results.card.favorite')"
++          :class="isFavorite ? 'text-amber-400 bg-amber-400/20' : 'text-white bg-white/30 hover:bg-white/50'"
++          class="flex rounded-full p-1.5 backdrop-blur-md border border-white/40 shadow-sm transition-all"
++        >
++          <Star class="w-4 h-4" :class="{ 'fill-current': isFavorite }" />
++        </button>
+         <button
+           v-if="canToggleBlock"
+           type="button"
+@@ -116,6 +139,15 @@ const expanded = ref(false)
+         <span class="text-2xl font-bold text-rose-600 tracking-tight">{{ info.当前售价 }}</span>
+         <span v-if="info['商品原价']" class="text-xs text-slate-400 line-through mb-1">{{ info['商品原价'] }}</span>
+       </div>
++      <div v-if="productTags.length" class="flex flex-wrap gap-1 mt-2">
++        <span
++          v-for="tag in productTags"
++          :key="tag"
++          class="rounded-md bg-slate-100 text-slate-500 px-1.5 py-0.5 text-[10px] font-medium"
++        >
++          {{ tag }}
++        </span>
++      </div>
+     </CardHeader>
+ 
+     <CardContent class="p-4 pt-2 flex-grow">
+diff --git a/web-ui/src/components/results/ResultsFilterBar.vue b/web-ui/src/components/results/ResultsFilterBar.vue
+index 9b5837e..216afd6 100644
+--- a/web-ui/src/components/results/ResultsFilterBar.vue
++++ b/web-ui/src/components/results/ResultsFilterBar.vue
+@@ -8,9 +8,13 @@ import {
+   SelectTrigger,
+   SelectValue,
+ } from '@/components/ui/select'
+-import { Checkbox } from '@/components/ui/checkbox'
++import { Input } from '@/components/ui/input'
+ import { Label } from '@/components/ui/label'
+ import { Button } from '@/components/ui/button'
++import { Sparkles, TrendingUp, Tags, Star, EyeOff, LayoutGrid, Search } from 'lucide-vue-next'
++import type { ResultCategory } from '@/api/results'
++import type { ResultCategoryCounts } from '@/types/result.d.ts'
++import type { FoundWithin } from '@/composables/useResults'
+ 
+ interface FileOption {
+   value: string
+@@ -18,14 +22,19 @@ interface FileOption {
+   taskName?: string
+ }
+ 
++type SortBy = 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count' | 'value_score'
++
+ interface Props {
+   files: string[]
+   fileOptions?: FileOption[]
+   selectedFile: string | null
+-  aiRecommendedOnly: boolean
+-  keywordRecommendedOnly: boolean
+-  includeHidden: boolean
+-  sortBy: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count'
++  category: ResultCategory
++  search: string
++  minPrice: string
++  maxPrice: string
++  foundWithin: FoundWithin
++  counts: ResultCategoryCounts | null
++  sortBy: SortBy
+   sortOrder: 'asc' | 'desc'
+   isLoading: boolean
+   isReady: boolean
+@@ -63,32 +72,32 @@ const labelClass = computed(() => {
+ 
+ const isSelectDisabled = computed(() => !props.isReady || options.value.length === 0)
+ 
++const categoryTabs = computed(() => {
++  const counts = props.counts
++  return [
++    { value: 'all' as ResultCategory, label: t('results.categories.all'), icon: LayoutGrid, count: counts?.all ?? null },
++    { value: 'ai_recommended' as ResultCategory, label: t('results.categories.aiRecommended'), icon: Sparkles, count: counts?.ai_recommended ?? null },
++    { value: 'high_value' as ResultCategory, label: t('results.categories.highValue'), icon: TrendingUp, count: counts?.high_value ?? null },
++    { value: 'keyword_hit' as ResultCategory, label: t('results.categories.keywordHit'), icon: Tags, count: counts?.keyword_hit ?? null },
++    { value: 'favorite' as ResultCategory, label: t('results.categories.favorite'), icon: Star, count: counts?.favorite ?? null },
++    { value: 'hidden' as ResultCategory, label: t('results.categories.hidden'), icon: EyeOff, count: counts?.hidden ?? null },
++  ]
++})
++
+ const emit = defineEmits<{
+   (e: 'update:selectedFile', value: string): void
+-  (e: 'update:aiRecommendedOnly', value: boolean): void
+-  (e: 'update:keywordRecommendedOnly', value: boolean): void
+-  (e: 'update:includeHidden', value: boolean): void
+-  (e: 'update:sortBy', value: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count'): void
++  (e: 'update:category', value: ResultCategory): void
++  (e: 'update:search', value: string): void
++  (e: 'update:minPrice', value: string): void
++  (e: 'update:maxPrice', value: string): void
++  (e: 'update:foundWithin', value: FoundWithin): void
++  (e: 'update:sortBy', value: SortBy): void
+   (e: 'update:sortOrder', value: 'asc' | 'desc'): void
+   (e: 'refresh'): void
+   (e: 'export'): void
+   (e: 'delete'): void
+   (e: 'manage-blacklist'): void
+ }>()
+-
+-function handleToggleAiRecommended(value: boolean) {
+-  emit('update:aiRecommendedOnly', value)
+-  if (value) {
+-    emit('update:keywordRecommendedOnly', false)
+-  }
+-}
+-
+-function handleToggleKeywordRecommended(value: boolean) {
+-  emit('update:keywordRecommendedOnly', value)
+-  if (value) {
+-    emit('update:aiRecommendedOnly', false)
+-  }
+-}
+ </script>
+ 
+ <template>
+@@ -114,10 +123,10 @@ function handleToggleKeywordRecommended(value: boolean) {
+       </div>
+ 
+       <div class="space-y-2">
+-        <Label class="text-xs font-semibold text-slate-500">{{ t('results.filters.sortByCrawlTime') }}</Label>
++        <Label class="text-xs font-semibold text-slate-500">{{ t('results.filters.sortLabel') }}</Label>
+         <Select
+           :model-value="props.sortBy"
+-          @update:model-value="(value) => emit('update:sortBy', value as any)"
++          @update:model-value="(value) => emit('update:sortBy', value as SortBy)"
+         >
+           <SelectTrigger class="w-full">
+             <SelectValue />
+@@ -127,6 +136,7 @@ function handleToggleKeywordRecommended(value: boolean) {
+             <SelectItem value="publish_time">{{ t('results.filters.sortByPublishTime') }}</SelectItem>
+             <SelectItem value="price">{{ t('results.filters.sortByPrice') }}</SelectItem>
+             <SelectItem value="keyword_hit_count">{{ t('results.filters.sortByKeywordHits') }}</SelectItem>
++            <SelectItem value="value_score">{{ t('results.filters.sortByValueScore') }}</SelectItem>
+           </SelectContent>
+         </Select>
+       </div>
+@@ -135,7 +145,7 @@ function handleToggleKeywordRecommended(value: boolean) {
+         <Label class="text-xs font-semibold text-slate-500">{{ t('results.filters.asc') }} / {{ t('results.filters.desc') }}</Label>
+         <Select
+           :model-value="props.sortOrder"
+-          @update:model-value="(value) => emit('update:sortOrder', value as any)"
++          @update:model-value="(value) => emit('update:sortOrder', value as 'asc' | 'desc')"
+         >
+           <SelectTrigger class="w-full">
+             <SelectValue />
+@@ -148,37 +158,100 @@ function handleToggleKeywordRecommended(value: boolean) {
+       </div>
+     </div>
+ 
+-    <div class="mt-4 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+-      <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+-        <div class="flex items-center space-x-2">
+-          <Checkbox
+-            id="ai-recommended-only"
+-            :model-value="props.aiRecommendedOnly"
+-            @update:modelValue="(value) => handleToggleAiRecommended(value === true)"
+-          />
+-          <Label for="ai-recommended-only" class="cursor-pointer">{{ t('results.filters.aiOnly') }}</Label>
++    <!-- 分类 Tab -->
++    <div class="mt-4 flex flex-wrap items-center gap-2" role="tablist" :aria-label="t('results.categories.label')">
++      <button
++        v-for="tab in categoryTabs"
++        :key="tab.value"
++        type="button"
++        role="tab"
++        :aria-selected="props.category === tab.value"
++        class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium transition-colors border"
++        :class="props.category === tab.value
++          ? 'bg-primary text-primary-foreground border-transparent shadow-sm'
++          : 'bg-white/70 text-slate-600 border-slate-200 hover:bg-slate-100'"
++        @click="emit('update:category', tab.value)"
++      >
++        <component :is="tab.icon" class="w-3.5 h-3.5" />
++        {{ tab.label }}
++        <span
++          class="ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none"
++          :class="props.category === tab.value ? 'bg-white/25 text-primary-foreground' : 'bg-slate-200/80 text-slate-500'"
++        >
++          {{ tab.count ?? '–' }}
++        </span>
++      </button>
++    </div>
++
++    <!-- 过滤行 -->
++    <div class="mt-4 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
++      <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
++        <div class="space-y-2 sm:w-56">
++          <Label class="text-xs font-semibold text-slate-500" for="result-search">
++            {{ t('results.filters.searchLabel') }}
++          </Label>
++          <div class="relative">
++            <Search class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
++            <Input
++              id="result-search"
++              :model-value="props.search"
++              class="pl-9"
++              :placeholder="t('results.filters.searchPlaceholder')"
++              @update:model-value="(value) => emit('update:search', String(value))"
++            />
++          </div>
+         </div>
+ 
+-        <div class="flex items-center space-x-2">
+-          <Checkbox
+-            id="keyword-recommended-only"
+-            :model-value="props.keywordRecommendedOnly"
+-            @update:modelValue="(value) => handleToggleKeywordRecommended(value === true)"
+-          />
+-          <Label for="keyword-recommended-only" class="cursor-pointer">{{ t('results.filters.keywordOnly') }}</Label>
++        <div class="space-y-2">
++          <Label class="text-xs font-semibold text-slate-500" for="result-min-price">
++            {{ t('results.filters.priceRange') }}
++          </Label>
++          <div class="flex items-center gap-1.5">
++            <Input
++              id="result-min-price"
++              :model-value="props.minPrice"
++              type="number"
++              min="0"
++              class="w-24"
++              :placeholder="t('results.filters.priceMin')"
++              @update:model-value="(value) => emit('update:minPrice', String(value))"
++            />
++            <span class="text-slate-400">–</span>
++            <Input
++              :model-value="props.maxPrice"
++              type="number"
++              min="0"
++              class="w-24"
++              :placeholder="t('results.filters.priceMax')"
++              @update:model-value="(value) => emit('update:maxPrice', String(value))"
++            />
++          </div>
+         </div>
+ 
+-        <div class="flex items-center space-x-2">
+-          <Checkbox
+-            id="include-hidden"
+-            :model-value="props.includeHidden"
+-            @update:modelValue="(value) => emit('update:includeHidden', value === true)"
+-          />
+-          <Label for="include-hidden" class="cursor-pointer">{{ t('results.filters.includeHidden') }}</Label>
++        <div class="space-y-2 sm:w-40">
++          <Label class="text-xs font-semibold text-slate-500" for="result-found-within">
++            {{ t('results.filters.foundWithin') }}
++          </Label>
++          <Select
++            :model-value="String(props.foundWithin)"
++            @update:model-value="(value) => emit('update:foundWithin', (value === 'last_visit' ? 'last_visit' : Number(value)) as FoundWithin)"
++          >
++            <SelectTrigger id="result-found-within" class="w-full">
++              <SelectValue />
++            </SelectTrigger>
++            <SelectContent>
++              <SelectItem value="0">{{ t('results.filters.foundAll') }}</SelectItem>
++              <SelectItem value="1">{{ t('results.filters.found24h') }}</SelectItem>
++              <SelectItem value="3">{{ t('results.filters.found3d') }}</SelectItem>
++              <SelectItem value="7">{{ t('results.filters.found7d') }}</SelectItem>
++              <SelectItem value="30">{{ t('results.filters.found30d') }}</SelectItem>
++              <SelectItem value="last_visit">{{ t('results.filters.foundSinceLastVisit') }}</SelectItem>
++            </SelectContent>
++          </Select>
+         </div>
+       </div>
+ 
+-      <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
++      <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:justify-end">
+         <Button @click="emit('refresh')" :disabled="props.isLoading">
+           {{ t('common.refresh') }}
+         </Button>
+diff --git a/web-ui/src/components/results/ResultsGrid.vue b/web-ui/src/components/results/ResultsGrid.vue
+index 3af7834..c22adb7 100644
+--- a/web-ui/src/components/results/ResultsGrid.vue
++++ b/web-ui/src/components/results/ResultsGrid.vue
+@@ -1,18 +1,31 @@
+ <script setup lang="ts">
+ import type { ResultItem } from '@/types/result.d.ts'
+ import { useI18n } from 'vue-i18n'
++import { Loader2 } from 'lucide-vue-next'
+ import ResultCard from './ResultCard.vue'
++import { Button } from '@/components/ui/button'
+ 
+ interface Props {
+   results: ResultItem[]
+   isLoading: boolean
++  isLoadingMore?: boolean
++  canLoadMore?: boolean
++  totalItems?: number
++  newSince?: string | null
+ }
+ 
+-defineProps<Props>()
++const props = withDefaults(defineProps<Props>(), {
++  isLoadingMore: false,
++  canLoadMore: false,
++  totalItems: 0,
++  newSince: null,
++})
+ const { t } = useI18n()
+ 
+ const emit = defineEmits<{
+   (e: 'toggle-block', item: ResultItem): void
++  (e: 'toggle-favorite', item: ResultItem): void
++  (e: 'load-more'): void
+ }>()
+ const skeletonItems = Array.from({ length: 8 }, (_, index) => index)
+ </script>
+@@ -45,8 +58,26 @@ const skeletonItems = Array.from({ length: 8 }, (_, index) => index)
+     <div v-else-if="results.length === 0" class="app-surface text-center py-12 text-gray-500">
+       {{ t('results.grid.empty') }}
+     </div>
+-    <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+-      <ResultCard v-for="item in results" :key="item.商品信息.商品ID" :item="item" @toggle-block="emit('toggle-block', $event)" />
++    <div v-else>
++      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
++        <ResultCard
++          v-for="item in results"
++          :key="item.商品信息.商品ID"
++          :item="item"
++          :new-since="props.newSince"
++          @toggle-block="emit('toggle-block', $event)"
++          @toggle-favorite="emit('toggle-favorite', $event)"
++        />
++      </div>
++      <div v-if="canLoadMore || totalItems > results.length" class="mt-8 flex flex-col items-center gap-2">
++        <Button variant="outline" :disabled="isLoadingMore" @click="emit('load-more')">
++          <Loader2 v-if="isLoadingMore" class="w-4 h-4 mr-2 animate-spin" />
++          {{ t('results.grid.loadMore') }}
++        </Button>
++        <span class="text-xs text-slate-400">
++          {{ t('results.grid.shownOfTotal', { shown: results.length, total: totalItems }) }}
++        </span>
++      </div>
+     </div>
+   </div>
+ </template>
+diff --git a/web-ui/src/composables/useResults.ts b/web-ui/src/composables/useResults.ts
+index 0a6d68b..959e9ec 100644
+--- a/web-ui/src/composables/useResults.ts
++++ b/web-ui/src/composables/useResults.ts
+@@ -1,13 +1,47 @@
+ import { ref, reactive, watch, onMounted, computed } from 'vue'
+ import { useRoute } from 'vue-router'
+ import { useI18n } from 'vue-i18n'
+-import type { ResultInsights, ResultItem } from '@/types/result.d.ts'
++import type { ResultCategoryCounts, ResultInsights, ResultItem } from '@/types/result.d.ts'
+ import * as resultsApi from '@/api/results'
+-import type { GetResultContentParams } from '@/api/results'
++import type { GetResultContentParams, ResultCategory } from '@/api/results'
+ import { useWebSocket } from '@/composables/useWebSocket'
+ import * as tasksApi from '@/api/tasks'
+ import { parseResultFilename, platformLabel } from '@/lib/platform'
+ 
++/** 发现时间范围：0=全部，'last_visit'=自上次查看，其余为天数 */
++export type FoundWithin = 0 | 1 | 3 | 7 | 30 | 'last_visit'
++
++interface ResultsFilters {
++  category: ResultCategory
++  search: string
++  minPrice: string
++  maxPrice: string
++  foundWithin: FoundWithin
++  sort_by: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count' | 'value_score'
++  sort_order: 'asc' | 'desc'
++}
++
++const FILTER_PERSIST_KEYS: (keyof ResultsFilters)[] = [
++  'category',
++  'search',
++  'minPrice',
++  'maxPrice',
++  'foundWithin',
++  'sort_by',
++  'sort_order',
++]
++
++const FETCH_DEBOUNCE_MS = 300
++
++function toLocalIso(date: Date): string {
++  const pad = (value: number, length = 2) => String(value).padStart(length, '0')
++  return (
++    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
++    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
++    `.${pad(date.getMilliseconds(), 3)}`
++  )
++}
++
+ export function useResults() {
+   const { t } = useI18n()
+   const route = useRoute()
+@@ -16,6 +50,7 @@ export function useResults() {
+   const selectedFile = ref<string | null>(null)
+   const results = ref<ResultItem[]>([])
+   const insights = ref<ResultInsights | null>(null)
++  const counts = ref<ResultCategoryCounts | null>(null)
+   const totalItems = ref(0)
+   const page = ref(1)
+   const limit = ref(100)
+@@ -25,28 +60,44 @@ export function useResults() {
+   const hasFetchedFiles = ref(false)
+   const hasFetchedTasks = ref(false)
+   const isSavingBlacklist = ref(false)
++  const isLoadingMore = ref(false)
++  // 「新商品」判定：watermark=上次查看到的最新爬取时间，prevVisit=当前角标基线
++  const newSinceWatermark = ref<string | null>(null)
++  const prevVisit = ref<string | null>(null)
+   const readyDelayMs = 200
+   let readyTimer: ReturnType<typeof setTimeout> | null = null
+-  
++  let fetchDebounceTimer: ReturnType<typeof setTimeout> | null = null
++
+   const STORAGE_KEY_FILTERS = 'resultFilters'
+ 
+-  function loadPersistedFilters(): Required<Omit<GetResultContentParams, 'page' | 'limit'>> {
+-    const defaults: Required<Omit<GetResultContentParams, 'page' | 'limit'>> = {
+-      recommended_only: false,
+-      ai_recommended_only: false,
+-      keyword_recommended_only: false,
+-      include_hidden: false,
++  function loadPersistedFilters(): ResultsFilters {
++    const defaults: ResultsFilters = {
++      category: 'all',
++      search: '',
++      minPrice: '',
++      maxPrice: '',
++      foundWithin: 0,
+       sort_by: 'crawl_time',
+       sort_order: 'desc',
+     }
+     try {
+       const saved = localStorage.getItem(STORAGE_KEY_FILTERS)
+-      if (saved) return { ...defaults, ...JSON.parse(saved) }
++      if (saved) {
++        const parsed = JSON.parse(saved) as Partial<ResultsFilters>
++        const sanitized: ResultsFilters = { ...defaults }
++        const target = sanitized as unknown as Record<string, unknown>
++        for (const key of FILTER_PERSIST_KEYS) {
++          if (parsed[key] !== undefined) {
++            target[key] = parsed[key]
++          }
++        }
++        return sanitized
++      }
+     } catch { /* ignore */ }
+     return defaults
+   }
+ 
+-  const filters = reactive<Required<Omit<GetResultContentParams, 'page' | 'limit'>>>(loadPersistedFilters())
++  const filters = reactive<ResultsFilters>(loadPersistedFilters())
+ 
+   const isLoading = ref(false)
+   const error = ref<Error | null>(null)
+@@ -61,6 +112,66 @@ export function useResults() {
+     return `${parsed.platform}:${normalizeKeyword(parsed.keyword)}`
+   }
+ 
++  function newSinceStorageKey(filename: string) {
++    return `resultNewSince:${filename}`
++  }
++
++  function loadNewSinceState() {
++    const file = selectedFile.value
++    const stored = file ? localStorage.getItem(newSinceStorageKey(file)) : null
++    newSinceWatermark.value = stored
++    prevVisit.value = stored
++  }
++
++  /** 请求前把 UI 筛选翻译成 API 参数（不含分页）。 */
++  function buildRequestParams(): GetResultContentParams {
++    const params: GetResultContentParams = {
++      category: filters.category,
++      sort_by: filters.sort_by,
++      sort_order: filters.sort_order,
++    }
++    const search = filters.search.trim()
++    if (search) params.search = search
++    if (filters.minPrice !== '') {
++      const min = Number(filters.minPrice)
++      if (!Number.isNaN(min)) params.min_price = min
++    }
++    if (filters.maxPrice !== '') {
++      const max = Number(filters.maxPrice)
++      if (!Number.isNaN(max)) params.max_price = max
++    }
++    if (filters.foundWithin === 'last_visit') {
++      // watermark 即「上次查看」时见到的最新时间
++      if (newSinceWatermark.value) params.found_since = newSinceWatermark.value
++    } else if (filters.foundWithin > 0) {
++      params.found_since = toLocalIso(new Date(Date.now() - filters.foundWithin * 86400000))
++    }
++    return params
++  }
++
++  /** 出现更新的记录时前移水位，并把角标基线定在旧水位。 */
++  function advanceNewSince(items: ResultItem[]) {
++    const file = selectedFile.value
++    if (!file) return
++    const newest = items
++      .map((item) => item.爬取时间)
++      .filter(Boolean)
++      .sort()
++      .pop()
++    if (!newest) return
++    const stored = localStorage.getItem(newSinceStorageKey(file))
++    if (!stored) {
++      // 首次访问：全部视为已见，不标新
++      localStorage.setItem(newSinceStorageKey(file), newest)
++      newSinceWatermark.value = newest
++      prevVisit.value = newest
++    } else if (newest > stored) {
++      prevVisit.value = stored
++      localStorage.setItem(newSinceStorageKey(file), newest)
++      newSinceWatermark.value = newest
++    }
++  }
++
+   // Methods
+   async function fetchFiles() {
+     try {
+@@ -87,32 +198,52 @@ export function useResults() {
+     }
+   }
+ 
+-  async function fetchResults() {
++  async function fetchPage(targetPage: number, append: boolean) {
+     if (!selectedFile.value) {
+       results.value = []
+       totalItems.value = 0
++      counts.value = null
+       return
+     }
+ 
+-    isLoading.value = true
++    if (append) isLoadingMore.value = true
++    else isLoading.value = true
+     error.value = null
+     try {
+       const data = await resultsApi.getResultContent(selectedFile.value, {
+-        ...filters,
+-        page: page.value,
++        ...buildRequestParams(),
++        page: targetPage,
+         limit: limit.value,
+       })
+-      results.value = data.items
++      if (append) results.value.push(...data.items)
++      else results.value = data.items
+       totalItems.value = data.total_items
++      if (data.counts) counts.value = data.counts
++      page.value = targetPage
++      advanceNewSince(data.items)
+     } catch (e) {
+       if (e instanceof Error) error.value = e
+-      results.value = []
+-      totalItems.value = 0
++      if (!append) {
++        results.value = []
++        totalItems.value = 0
++      }
+     } finally {
+       isLoading.value = false
++      isLoadingMore.value = false
+     }
+   }
+ 
++  function fetchResults() {
++    return fetchPage(1, false)
++  }
++
++  const canLoadMore = computed(() => results.value.length < totalItems.value)
++
++  async function loadMore() {
++    if (!selectedFile.value || isLoading.value || isLoadingMore.value || !canLoadMore.value) return
++    await fetchPage(page.value + 1, true)
++  }
++
+   async function fetchInsights() {
+     if (!selectedFile.value) {
+       insights.value = null
+@@ -199,7 +330,7 @@ export function useResults() {
+   async function exportSelectedResults() {
+     if (!selectedFile.value) return
+     try {
+-      await resultsApi.downloadResultExport(selectedFile.value, { ...filters })
++      await resultsApi.downloadResultExport(selectedFile.value, buildRequestParams())
+     } catch (e) {
+       if (e instanceof Error) error.value = e
+     }
+@@ -217,6 +348,7 @@ export function useResults() {
+         if (lastSelected === target) {
+           localStorage.removeItem('lastSelectedResultFile')
+         }
++        localStorage.removeItem(newSinceStorageKey(target))
+       }
+       await fetchFiles()
+     } catch (e) {
+@@ -240,6 +372,22 @@ export function useResults() {
+     }
+   }
+ 
++  async function toggleItemFavorite(item: ResultItem) {
++    const file = selectedFile.value
++    const itemId = item.商品信息?.商品ID
++    if (!file || !itemId) return
++    const next = item._is_favorite !== true
++    const previous = item._is_favorite === true
++    item._is_favorite = next // 乐观更新，失败回滚
++    try {
++      await resultsApi.updateItemFavorite(file, itemId, next)
++      counts.value = await resultsApi.getResultCounts(file)
++    } catch (e) {
++      item._is_favorite = previous
++      if (e instanceof Error) error.value = e
++    }
++  }
++
+   async function saveBlacklistRules(keywords: string[]) {
+     if (!selectedFile.value) return
+     isSavingBlacklist.value = true
+@@ -258,11 +406,27 @@ export function useResults() {
+   }
+ 
+   // Watchers
+-  watch(filters, (val) => {
+-    localStorage.setItem(STORAGE_KEY_FILTERS, JSON.stringify(val))
++  watch(
++    filters,
++    (val) => {
++      const persisted: Record<string, unknown> = {}
++      for (const key of FILTER_PERSIST_KEYS) {
++        persisted[key] = val[key]
++      }
++      localStorage.setItem(STORAGE_KEY_FILTERS, JSON.stringify(persisted))
++    },
++    { deep: true }
++  )
++  watch([selectedFile, filters], () => {
++    // 输入防抖：搜索/价格等快速变化时不立刻打请求
++    if (fetchDebounceTimer) clearTimeout(fetchDebounceTimer)
++    fetchDebounceTimer = setTimeout(() => {
++      fetchDebounceTimer = null
++      fetchPage(1, false)
++    }, FETCH_DEBOUNCE_MS)
+   }, { deep: true })
+-  watch([selectedFile, filters], fetchResults, { deep: true })
+   watch(selectedFile, () => {
++    loadNewSinceState()
+     fetchInsights()
+     fetchBlacklistRules()
+   })
+@@ -300,6 +464,7 @@ export function useResults() {
+   onMounted(() => {
+     fetchFiles()
+     fetchTaskNameMap()
++    loadNewSinceState()
+   })
+ 
+   return {
+@@ -307,15 +472,23 @@ export function useResults() {
+     selectedFile,
+     results,
+     insights,
++    counts,
+     totalItems,
++    page,
+     filters,
+     isLoading,
++    isLoadingMore,
++    canLoadMore,
+     error,
++    newSince: computed(() => prevVisit.value),
+     fetchFiles, // Expose to allow manual refresh
++    fetchResults,
++    loadMore,
+     refreshResults,
+     exportSelectedResults,
+     deleteSelectedFile,
+     toggleItemBlock,
++    toggleItemFavorite,
+     blacklistKeywords,
+     isSavingBlacklist,
+     saveBlacklistRules,
+diff --git a/web-ui/src/types/result.d.ts b/web-ui/src/types/result.d.ts
+index c72c5c9..971941d 100644
+--- a/web-ui/src/types/result.d.ts
++++ b/web-ui/src/types/result.d.ts
+@@ -93,6 +93,15 @@ export interface ResultInsights {
+   latest_snapshot_at?: string | null;
+ }
+ 
++export interface ResultCategoryCounts {
++  all: number;
++  ai_recommended: number;
++  high_value: number;
++  keyword_hit: number;
++  favorite: number;
++  hidden: number;
++}
++
+ export interface ResultItem {
+   "爬取时间": string;
+   "搜索关键字": string;
+@@ -106,4 +115,5 @@ export interface ResultItem {
+   _effective_hidden?: boolean;
+   _hidden_reason?: 'manual' | 'rule' | 'expired' | null;
+   _matched_blacklist_keywords?: string[];
++  _is_favorite?: boolean;
+ }
+diff --git a/web-ui/src/views/ResultsView.vue b/web-ui/src/views/ResultsView.vue
+index 9cc7d7c..da7102a 100644
+--- a/web-ui/src/views/ResultsView.vue
++++ b/web-ui/src/views/ResultsView.vue
+@@ -24,13 +24,20 @@ const {
+   selectedFile,
+   results,
+   insights,
++  counts,
++  totalItems,
+   filters,
+   isLoading,
++  isLoadingMore,
++  canLoadMore,
+   error,
++  newSince,
++  loadMore,
+   refreshResults,
+   exportSelectedResults,
+   deleteSelectedFile,
+   toggleItemBlock,
++  toggleItemFavorite,
+   blacklistKeywords,
+   isSavingBlacklist,
+   saveBlacklistRules,
+@@ -143,11 +150,14 @@ async function handleSaveBlacklistRules() {
+       :file-options="fileOptions"
+       :is-ready="isFileOptionsReady"
+       v-model:selectedFile="selectedFile"
+-      v-model:aiRecommendedOnly="filters.ai_recommended_only"
+-      v-model:keywordRecommendedOnly="filters.keyword_recommended_only"
+-      v-model:includeHidden="filters.include_hidden"
++      v-model:category="filters.category"
++      v-model:search="filters.search"
++      v-model:minPrice="filters.minPrice"
++      v-model:maxPrice="filters.maxPrice"
++      v-model:foundWithin="filters.foundWithin"
+       v-model:sortBy="filters.sort_by"
+       v-model:sortOrder="filters.sort_order"
++      :counts="counts"
+       :is-loading="isLoading"
+       @refresh="refreshResults"
+       @manage-blacklist="openBlacklistDialog"
+@@ -157,7 +167,17 @@ async function handleSaveBlacklistRules() {
+ 
+     <ResultsInsightsPanel :insights="insights" :selected-task-label="selectedTaskLabel" />
+ 
+-    <ResultsGrid :results="results" :is-loading="isLoading" @toggle-block="toggleItemBlock" />
++    <ResultsGrid
++      :results="results"
++      :is-loading="isLoading"
++      :is-loading-more="isLoadingMore"
++      :can-load-more="canLoadMore"
++      :total-items="totalItems"
++      :new-since="newSince"
++      @toggle-block="toggleItemBlock"
++      @toggle-favorite="toggleItemFavorite"
++      @load-more="loadMore"
++    />
+ 
+     <Dialog v-model:open="isDeleteDialogOpen">
+       <DialogContent class="sm:max-w-[420px]">

@@ -219,6 +219,8 @@ async def export_result_file_content(
     effective_category = _normalize_category(
         category, ai_recommended_only, keyword_recommended_only
     )
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status_code=400, detail="最低价不能高于最高价。")
 
     try:
         validate_result_filename(filename)

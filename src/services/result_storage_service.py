@@ -224,17 +224,17 @@ def _apply_record_filters(
     filtered: list[dict] = []
     for record in records:
         if show_hidden_only:
-            if not _is_record_visible(record):
-                filtered.append(record)
-            continue
-        if not include_hidden and not _is_record_visible(record):
-            continue
-        if not _record_matches_category(record, effective_category):
-            continue
-        if ai_recommended_only and not _is_ai_recommended_record(record):
-            continue
-        if keyword_recommended_only and not _is_keyword_hit_record(record):
-            continue
+            if _is_record_visible(record):
+                continue
+        else:
+            if not include_hidden and not _is_record_visible(record):
+                continue
+            if not _record_matches_category(record, effective_category):
+                continue
+            if ai_recommended_only and not _is_ai_recommended_record(record):
+                continue
+            if keyword_recommended_only and not _is_keyword_hit_record(record):
+                continue
         if search_text and search_text not in _record_search_text(record).lower():
             continue
         if min_price is not None or max_price is not None:
