@@ -28,7 +28,18 @@ from src.services.account_strategy_service import normalize_account_strategy
 from src.infrastructure.persistence.storage_names import build_result_filename
 from src.services.price_history_service import delete_price_snapshots
 from src.services.result_storage_service import delete_result_file_records
+from src.services import license_gate
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+
+async def _enforce_license_limits(service: TaskService, platform: str) -> None:
+    """License 门禁：free 版平台与任务数限制（Pro 解锁）。"""
+    reason = license_gate.gate_platform(platform)
+    if reason is None:
+        tasks = await service.get_all_tasks()
+        reason = license_gate.gate_task_count(len(tasks))
+    if reason is not None:
+        raise HTTPException(status_code=403, detail=reason)
 
 async def _reload_scheduler_if_needed(
     task_service: TaskService,
@@ -81,6 +92,7 @@ async def create_task(
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
 ):
     """创建新任务"""
+    await _enforce_license_limits(service, task_create.platform or "xianyu")
     task = await service.create_task(task_create)
     await _reload_scheduler_if_needed(service, scheduler_service)
     return {"message": "任务创建成功", "task": serialize_task(task, scheduler_service)}
@@ -96,6 +108,7 @@ async def generate_task(
 
     try:
         mode = req.decision_mode or "ai"
+        await _enforce_license_limits(service, req.platform or "xianyu")
         if mode == "ai":
             job = await generation_service.create_job(req.task_name)
             generation_service.track(

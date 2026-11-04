@@ -5,6 +5,7 @@ const zhCN = {
     name: '闲鱼智能监控',
   },
   platforms: {
+    ebay: 'eBay（海外捡漏）',
     xianyu: '闲鱼',
     kongfz: '孔夫子旧书网',
   },
@@ -239,6 +240,19 @@ const zhCN = {
     trimmedNotice: '...日志过长已截断，仅保留最新内容...',
   },
   settings: {
+    security: {
+      title: '账号与安全',
+      description: '修改管理台登录的用户名与密码。',
+      oldUsername: '原用户名',
+      oldPassword: '原密码',
+      newUsername: '新用户名',
+      newPassword: '新密码',
+      newPasswordHint: '至少 6 位',
+      oldPlaceholder: '默认 admin / admin123',
+      submit: '更新账号密码',
+      changeFailed: '修改失败',
+      note: '修改成功后其他已登录设备将自动失效。',
+    },
     title: '系统设置',
     tabs: {
       ai: 'AI 模型',
@@ -344,7 +358,16 @@ const zhCN = {
       promptContentFailed: '加载 Prompt 内容失败',
     },
   },
-  ...zhCNExtra,
+  
+  setup: {
+    banner: {
+      title: '完成初始设置（三步）',
+      dismiss: '不再提示',
+      stepPassword: '修改默认账号密码（安全第一步）',
+      stepAi: '配置 AI 模型（推荐智谱免费方案）',
+      stepNotification: '配置手机推送（命中即提醒）',
+    },
+  },
+...zhCNExtra,
 }
-
 export default zhCN

@@ -108,7 +108,7 @@ def install_deps() -> None:
             "--no-warn-script-location",
             "fastapi", "uvicorn[standard]", "pydantic-settings", "python-dotenv",
             "playwright", "requests", "openai", "httpx[socks]", "python-socks",
-            "apscheduler", "aiofiles", "Pillow", "pyzbar", "qrcode", "jinja2", "pystray",
+            "apscheduler", "aiofiles", "Pillow", "pyzbar", "qrcode", "jinja2", "pystray", "beautifulsoup4",
         ],
         check=True,
     )

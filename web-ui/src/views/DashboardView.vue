@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useDashboard } from '@/composables/useDashboard'
@@ -21,6 +21,31 @@ import {
 
 const router = useRouter()
 const { t } = useI18n()
+
+// ---- 首启向导（改密码 / 配 AI / 配通知） ----
+const setupStatus = ref<{ password_changed: boolean; ai_configured: boolean; notification_configured: boolean } | null>(null)
+const setupDismissed = ref(localStorage.getItem('setup_banner_dismissed') === 'true')
+
+async function loadSetupStatus() {
+  try {
+    const { getSetupStatus } = await import('@/api/setup')
+    setupStatus.value = await getSetupStatus()
+  } catch (e) {
+    console.error('setup status failed', e)
+  }
+}
+
+const showSetupBanner = computed(() => {
+  if (!setupStatus.value || setupDismissed.value) return false
+  return !(setupStatus.value.password_changed && setupStatus.value.ai_configured && setupStatus.value.notification_configured)
+})
+
+function dismissSetupBanner() {
+  setupDismissed.value = true
+  localStorage.setItem('setup_banner_dismissed', 'true')
+}
+
+onMounted(loadSetupStatus)
 const {
   focusInsights,
   focusTask,
@@ -134,6 +159,28 @@ function openActivity(activity: { filename: string | null; type: string }) {
 
 <template>
   <div class="space-y-8 animate-fade-in">
+
+    <!-- 首启向导横幅 -->
+    <div v-if="showSetupBanner" class="bg-gradient-to-r from-amber-50 to-blue-50 border border-amber-200 rounded-xl p-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="font-bold text-amber-900">{{ t('setup.banner.title') }}</span>
+        <button class="text-xs text-gray-400 hover:text-gray-600" @click="dismissSetupBanner">{{ t('setup.banner.dismiss') }}</button>
+      </div>
+      <div class="grid gap-2 md:grid-cols-3">
+        <router-link to="/settings" class="flex items-center gap-2 p-2 rounded-lg bg-white/70 hover:bg-white transition-colors">
+          <span :class="setupStatus?.password_changed ? 'text-green-600' : 'text-amber-500'">{{ setupStatus?.password_changed ? '✓' : '①' }}</span>
+          <span class="text-sm">{{ t('setup.banner.stepPassword') }}</span>
+        </router-link>
+        <router-link to="/settings" class="flex items-center gap-2 p-2 rounded-lg bg-white/70 hover:bg-white transition-colors">
+          <span :class="setupStatus?.ai_configured ? 'text-green-600' : 'text-amber-500'">{{ setupStatus?.ai_configured ? '✓' : '②' }}</span>
+          <span class="text-sm">{{ t('setup.banner.stepAi') }}</span>
+        </router-link>
+        <router-link to="/settings" class="flex items-center gap-2 p-2 rounded-lg bg-white/70 hover:bg-white transition-colors">
+          <span :class="setupStatus?.notification_configured ? 'text-green-600' : 'text-amber-500'">{{ setupStatus?.notification_configured ? '✓' : '③' }}</span>
+          <span class="text-sm">{{ t('setup.banner.stepNotification') }}</span>
+        </router-link>
+      </div>
+    </div>
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
       <div>
         <h1 class="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">

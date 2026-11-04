@@ -5,6 +5,7 @@ const enUS = {
     name: 'Goofish Monitor',
   },
   platforms: {
+    ebay: 'eBay (overseas)',
     xianyu: 'Xianyu',
     kongfz: 'Kongfz',
   },
@@ -239,6 +240,19 @@ const enUS = {
     trimmedNotice: '...log output was truncated to keep only the newest content...',
   },
   settings: {
+    security: {
+      title: 'Account & Security',
+      description: 'Change the admin username and password.',
+      oldUsername: 'Current username',
+      oldPassword: 'Current password',
+      newUsername: 'New username',
+      newPassword: 'New password',
+      newPasswordHint: 'At least 6 characters',
+      oldPlaceholder: 'Default admin / admin123',
+      submit: 'Update credentials',
+      changeFailed: 'Update failed',
+      note: 'Other signed-in devices will be signed out after the change.',
+    },
     title: 'Settings',
     tabs: {
       ai: 'AI Model',
@@ -344,7 +358,16 @@ const enUS = {
       promptContentFailed: 'Failed to load prompt content.',
     },
   },
-  ...enUSExtra,
+  
+  setup: {
+    banner: {
+      title: 'Finish setup (3 steps)',
+      dismiss: 'Dismiss',
+      stepPassword: 'Change the default admin password',
+      stepAi: 'Configure an AI model (Zhipu free recommended)',
+      stepNotification: 'Set up push notifications',
+    },
+  },
+...enUSExtra,
 }
-
 export default enUS

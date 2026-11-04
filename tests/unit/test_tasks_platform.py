@@ -47,12 +47,13 @@ def test_create_accepts_kongfz_and_defaults_xianyu():
 
 
 def test_unknown_platform_is_rejected():
+    # 未注册平台直接拒绝（错误消息动态列出可选平台）
     with pytest.raises(ValidationError):
         TaskCreate(
             task_name="相机",
             keyword="a7m4",
             description="机身成色好",
-            platform="ebay",
+            platform="amazon",
         )
 
 

@@ -40,6 +40,24 @@ const XIANYU_CAPABILITIES: PlatformCapabilities = {
   requires_login_state: true,
   seller_profile: true,
 }
+const proUnlocked = ref<boolean | null>(null)
+
+async function loadLicenseState() {
+  try {
+    const { http } = await import('@/lib/http')
+    const status = await http('/api/cloud/status')
+    proUnlocked.value = Boolean(status?.license?.ok)
+  } catch {
+    proUnlocked.value = false
+  }
+}
+loadLicenseState()
+
+function isPlatformLocked(platformId: string): boolean {
+  if (proUnlocked.value === null || proUnlocked.value) return false
+  return platformId !== 'xianyu'
+}
+
 const platforms = ref<PlatformInfo[]>([
   { platform_id: 'xianyu', display_name: '闲鱼', capabilities: XIANYU_CAPABILITIES },
   {
@@ -330,7 +348,10 @@ function handleSubmit() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem v-for="option in platforms" :key="option.platform_id" :value="option.platform_id">
-                {{ platformOptionLabel(option) }}
+                <span class="inline-flex items-center gap-1">
+                  {{ platformOptionLabel(option) }}
+                  <span v-if="isPlatformLocked(option.platform_id)" class="text-[10px] font-bold bg-amber-100 text-amber-700 px-1 rounded">PRO</span>
+                </span>
               </SelectItem>
             </SelectContent>
           </Select>

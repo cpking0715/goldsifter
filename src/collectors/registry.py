@@ -9,12 +9,13 @@ from __future__ import annotations
 import importlib
 
 from src.collectors.base import CollectorDefinition, validate_collector_module
-from src.collectors.platforms import PLATFORM_KONGFZ, PLATFORM_XIANYU
+from src.collectors.platforms import PLATFORM_EBAY, PLATFORM_KONGFZ, PLATFORM_XIANYU
 
 # 平台 -> 采集器模块路径
 _COLLECTOR_MODULES: dict[str, str] = {
     PLATFORM_XIANYU: "src.collectors.xianyu",
     PLATFORM_KONGFZ: "src.collectors.kongfz",
+    PLATFORM_EBAY: "src.collectors.ebay",
 }
 
 _cache: dict[str, CollectorDefinition] = {}

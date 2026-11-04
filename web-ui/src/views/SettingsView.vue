@@ -23,6 +23,7 @@ import {
   type CloudStatus,
   type UpdateCheckResult,
 } from '@/api/cloud'
+import { changePassword } from '@/api/setup'
 import {
   listAiProviders,
   matchProvider,
@@ -59,6 +60,28 @@ const cloudStatus = ref<CloudStatus | null>(null)
 const licenseKeyInput = ref('')
 const isCloudBusy = ref(false)
 const updateResult = ref<UpdateCheckResult | null>(null)
+
+// ---- 账号与安全（改用户名/密码） ----
+const securityForm = ref({ old_username: '', old_password: '', new_username: '', new_password: '' })
+const isSecurityBusy = ref(false)
+
+async function handleChangePassword() {
+  const f = securityForm.value
+  if (!f.old_username || !f.old_password || !f.new_username || !f.new_password) return
+  isSecurityBusy.value = true
+  try {
+    const result = await changePassword({ ...f })
+    notifySuccess(result.message)
+    // 旧 token 已失效：换存新 token
+    localStorage.setItem('auth_token', result.token)
+    localStorage.setItem('auth_username', result.username)
+    securityForm.value = { old_username: '', old_password: '', new_username: '', new_password: '' }
+  } catch (e) {
+    notifyError(t('settings.security.changeFailed'), (e as Error).message)
+  } finally {
+    isSecurityBusy.value = false
+  }
+}
 
 // ---- AI 供应商预设 ----
 const aiProviders = ref<AIProviderPreset[]>([])
@@ -490,6 +513,37 @@ watch(selectedPrompt, async (value) => {
 
       <!-- Status Tab -->
       <TabsContent value="status">
+        <!-- 账号与安全 -->
+        <Card class="mb-6">
+          <CardHeader>
+            <CardTitle>{{ t('settings.security.title') }}</CardTitle>
+            <CardDescription>{{ t('settings.security.description') }}</CardDescription>
+          </CardHeader>
+          <CardContent class="grid gap-3 md:grid-cols-2">
+            <div class="grid gap-1.5">
+              <Label>{{ t('settings.security.oldUsername') }}</Label>
+              <Input v-model="securityForm.old_username" :placeholder="t('settings.security.oldPlaceholder')" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>{{ t('settings.security.oldPassword') }}</Label>
+              <Input v-model="securityForm.old_password" type="password" :placeholder="t('settings.security.oldPlaceholder')" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>{{ t('settings.security.newUsername') }}</Label>
+              <Input v-model="securityForm.new_username" placeholder="admin" />
+            </div>
+            <div class="grid gap-1.5">
+              <Label>{{ t('settings.security.newPassword') }}</Label>
+              <Input v-model="securityForm.new_password" type="password" :placeholder="t('settings.security.newPasswordHint')" />
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button @click="handleChangePassword" :disabled="isSecurityBusy || !securityForm.old_username || !securityForm.old_password || !securityForm.new_username || !securityForm.new_password">
+              {{ t('settings.security.submit') }}
+            </Button>
+            <p class="text-xs text-gray-500 ml-3">{{ t('settings.security.note') }}</p>
+          </CardFooter>
+        </Card>
         <Card>
           <CardHeader>
             <CardTitle>{{ t('settings.status.title') }}</CardTitle>
